@@ -14,7 +14,7 @@ A command-line and web-based tool for controlling Nanoleaf light panels over you
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - A Nanoleaf device (Skylights, Light Panels, Shapes, Essentials) on the same local network
 - Internet connection (optional, only for weather integration)
 
