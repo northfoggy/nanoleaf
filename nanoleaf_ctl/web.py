@@ -1640,15 +1640,24 @@ def _start_watchdog() -> None:
     _watchdog_thread.start()
 
 
+def _start_auto_start_worker() -> None:
+    """Connect to the device without delaying web-service readiness."""
+    threading.Thread(
+        target=_auto_start_simulator,
+        daemon=True,
+        name="sunlight-auto-start",
+    ).start()
+
+
 def run(host: str = "0.0.0.0", port: int = 5000, ip: str | None = None):
     """Start the web interface."""
     global _nl
     if ip:
         _nl = client.connect(ip)
     server = make_server(host, port, app, threaded=True)
-    _auto_start_simulator()
     _start_watchdog()
     _sd_notify("READY=1")
+    _start_auto_start_worker()
     try:
         server.serve_forever()
     finally:

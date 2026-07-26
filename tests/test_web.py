@@ -43,14 +43,16 @@ def test_run_notifies_ready_only_after_server_is_bound(monkeypatch):
         return Server()
 
     monkeypatch.setattr(web, "make_server", make_server)
-    monkeypatch.setattr(web, "_auto_start_simulator", lambda: events.append("auto-start"))
+    monkeypatch.setattr(
+        web, "_start_auto_start_worker", lambda: events.append("auto-start-worker")
+    )
     monkeypatch.setattr(web, "_start_watchdog", lambda: events.append("watchdog"))
     monkeypatch.setattr(web, "_sd_notify", lambda state: events.append(state))
 
     web.run(host="127.0.0.1", port=5000)
 
     assert events == [
-        "bound", "auto-start", "watchdog", "READY=1", "serve", "STOPPING=1", "close",
+        "bound", "watchdog", "READY=1", "auto-start-worker", "serve", "STOPPING=1", "close",
     ]
 
 
