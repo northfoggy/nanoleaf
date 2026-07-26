@@ -188,6 +188,8 @@ def test_dashboard_includes_branding_and_dynamic_house_scene():
     assert response.status_code == 200
     assert "NanoLeaf Sunlight Simulator" in html
     assert "by Quicksilver Industries LTD." in html
+    assert "not affiliated with" in html
+    assert "support.nanoleaf.me" in html
     assert 'id="houseGraphic"' in html
     assert 'id="sceneLocation"' in html
     assert 'id="sceneOrientation"' in html

@@ -10,6 +10,12 @@ runtime state under `/var/lib/nanoleaf`.
 The Python package itself also runs on Windows and other Linux hosts. The
 included systemd unit is path-specific and must be edited for other accounts.
 
+Before continuing, read [Device safety and third-party notice](../SAFETY.md).
+Use Nanoleaf's [official support instructions](https://support.nanoleaf.me/hc/en-us)
+for the exact device model. Project instructions do not replace the
+manufacturer's installation, pairing, reset, electrical, firmware, or safety
+instructions.
+
 ## Clone and install
 
 ```bash
@@ -57,8 +63,12 @@ executables under `/opt/nanoleaf/venv/bin`.
 venv/bin/nanoleaf-ctl discover
 ```
 
-Hold the Nanoleaf power button for 5-7 seconds until its pairing indicator
-flashes, then run:
+Immediately before running the command, use Nanoleaf's current instructions for
+the exact model to open its third-party or local-API pairing window. Button
+combinations and timing differ among products; do not guess or substitute reset
+instructions. Start with Nanoleaf's
+[official pairing guidance](https://support.nanoleaf.me/hc/en-us/articles/33036154567700-Pairing-Nanoleaf-App-Desktop),
+then run:
 
 ```bash
 venv/bin/nanoleaf-ctl pair <device-ip>

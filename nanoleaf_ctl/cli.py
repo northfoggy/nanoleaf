@@ -2,7 +2,7 @@
 
 Usage:
     nanoleaf-ctl discover          -- find devices on the network
-    nanoleaf-ctl pair <ip>         -- pair with a device (hold power 5-7s first)
+    nanoleaf-ctl pair <ip>         -- pair using the model's official instructions
     nanoleaf-ctl info              -- show device info
     nanoleaf-ctl on                -- turn on
     nanoleaf-ctl off               -- turn off
@@ -46,12 +46,12 @@ def cmd_discover(args):
 
 def cmd_pair(args):
     print(f"Pairing with {args.ip}...")
-    print("(Skylight: use app → Settings → 'Connect to API')")
-    print("(Other panels: hold power button for 5-7 seconds)")
+    print("Follow Nanoleaf's instructions for this exact model before pairing:")
+    print("https://support.nanoleaf.me/hc/en-us")
+    print("This independent third-party project is not affiliated with Nanoleaf.")
     try:
-        token = client.pair(args.ip)
-        print(f"Paired successfully! Auth token saved.")
-        print(f"Token: {token}")
+        client.pair(args.ip)
+        print("Paired successfully. Auth token saved with private permissions.")
     except Exception as e:
         print(f"Pairing failed: {e}")
         print("Ensure the device is in pairing mode.")

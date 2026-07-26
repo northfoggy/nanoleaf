@@ -9,6 +9,17 @@ The application can run from the command line or as a browser dashboard. Its
 primary deployment target is a Raspberry Pi on the same LAN as the Nanoleaf
 device.
 
+> [!IMPORTANT]
+> This is an independent, experimental third-party project. It is not
+> affiliated with, sponsored, endorsed, authorized, or supported by Nanoleaf
+> Canada Ltd. Before pairing or controlling a device, read the
+> [official Nanoleaf support instructions](https://support.nanoleaf.me/hc/en-us)
+> for your exact model and review Nanoleaf's
+> [hardware warranty terms](https://support.nanoleaf.me/hc/en-us/articles/41719770834580-T-C-Warranty-Limited-Product-Warranty-Legalese-Version).
+> Incorrect or unsupported changes can cause unexpected operation, make a
+> device temporarily or permanently inoperable, damage hardware, and may
+> affect or void warranty coverage. Use this software at your own risk.
+
 ## What it does
 
 - Controls power, brightness, color, color temperature, and saved effects.
@@ -49,9 +60,13 @@ venv/bin/nanoleaf-ctl discover
 venv/bin/nanoleaf-ctl pair <device-ip>
 ```
 
-Hold the Nanoleaf power button for 5-7 seconds before running `pair`. Pairing
-stores the device IP and token in
-`~/.config/nanoleaf-ctl/config.json` with owner-only permissions.
+Immediately before running `pair`, follow Nanoleaf's current, model-specific
+instructions to open the device's third-party or local-API pairing window. Do
+not assume one button sequence or hold duration applies to every model. Start
+with Nanoleaf's [official pairing guidance](https://support.nanoleaf.me/hc/en-us/articles/33036154567700-Pairing-Nanoleaf-App-Desktop)
+and support site. Pairing stores the device IP and token in
+`~/.config/nanoleaf-ctl/config.json` with owner-only permissions. See
+[Device safety and third-party notice](SAFETY.md) before proceeding.
 
 Start the dashboard:
 
@@ -109,6 +124,7 @@ verified procedure.
 | [Security](docs/SECURITY.md) | Token handling, permissions, LAN exposure, service hardening, and SSH access |
 | [Development](docs/DEVELOPMENT.md) | Test workflow, code map, change checklist, and release verification |
 | [Brand policy](TRADEMARKS.md) | Permitted references to Quicksilver Industries and restrictions on branding forks |
+| [Device safety](SAFETY.md) | Manufacturer instructions, third-party status, operational risks, and warranty notice |
 
 ## Important security note
 

@@ -13,6 +13,22 @@ Protected assets include:
 - the Raspberry Pi account and SSH key;
 - location and orientation displayed by the dashboard.
 
+## Device safety and third-party status
+
+This independent project is not affiliated with, sponsored, endorsed,
+authorized, or supported by Nanoleaf Canada Ltd. Follow the official
+[Nanoleaf support instructions](https://support.nanoleaf.me/hc/en-us) for the
+exact model before pairing, resetting, updating, installing, or changing its
+electrical configuration. Review [SAFETY.md](../SAFETY.md) and Nanoleaf's
+[hardware warranty terms](https://support.nanoleaf.me/hc/en-us/articles/41719770834580-T-C-Warranty-Limited-Product-Warranty-Legalese-Version).
+
+Third-party control changes the physical device's state. Incorrect,
+unsupported, interrupted, or excessive operations can cause unexpected
+behavior, loss of configuration, disconnection, unresponsiveness, reduced
+service life, or hardware damage, and may affect warranty coverage. Do not
+interrupt firmware updates or perform a reset unless the manufacturer directs
+it for the exact model.
+
 ## Network exposure
 
 The web server binds to `0.0.0.0` and the API has no authentication. Anyone who

@@ -34,3 +34,11 @@ must be obtained separately from Quicksilver Industries LTD.
 
 This policy describes the permissions granted by the project and does not limit
 uses that applicable law permits without authorization.
+
+## Third-party marks and non-affiliation
+
+Nanoleaf and related product names, logos, and marks belong to Nanoleaf Canada
+Ltd. or its applicable affiliates or licensors. Their use in this project is
+solely descriptive. This project and Quicksilver Industries LTD. are not
+affiliated with, sponsored, endorsed, authorized, or supported by Nanoleaf
+Canada Ltd.
