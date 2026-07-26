@@ -126,6 +126,20 @@ erasure from flash media.
 - Do not run arbitrary installation commands copied from dashboard content or
   logs.
 
+## Repository safeguards
+
+The public GitHub repository uses:
+
+- GitHub secret scanning;
+- push protection for detected credentials;
+- pull-request CI on Python 3.10 and 3.13;
+- ignore rules for common credential, private-key, environment, runtime-log,
+  and local configuration files;
+- a noreply Git commit address for maintainer privacy.
+
+These safeguards reduce future risk but do not replace review. Run a full
+history scanner before publishing any branch that previously held local data.
+
 ## Reporting a security issue
 
 Do not include live tokens, private keys, precise private-network details, or
