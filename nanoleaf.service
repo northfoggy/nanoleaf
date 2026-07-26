@@ -1,0 +1,16 @@
+[Unit]
+Description=Nanoleaf Control Web Interface
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=northfoggy
+WorkingDirectory=/home/northfoggy/nanoleaf
+ExecStart=/home/northfoggy/nanoleaf/venv/bin/nanoleaf-ctl web --port 5000
+Restart=always
+RestartSec=5
+WatchdogSec=120
+
+[Install]
+WantedBy=multi-user.target

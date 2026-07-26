@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0,<75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nanoleaf-ctl"
+version = "0.1.0"
+description = "Control Nanoleaf lights from the command line or a web dashboard, with a weather-aware sunlight simulator that mimics natural window light throughout the day."
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{ name = "Jason Mitchell" }]
+keywords = ["nanoleaf", "smart-home", "home-automation", "raspberry-pi", "sunlight-simulator", "iot", "lighting"]
+readme = "README.md"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+"Programming Language :: Python :: 3",
+    "Topic :: Home Automation",
+]
+dependencies = [
+    "nanoleafapi>=2.1.2",
+    "astral>=3.2",
+    "requests>=2.28",
+    "flask>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/northfoggy/nanoleaf"
+Issues = "https://github.com/northfoggy/nanoleaf/issues"
+
+[project.scripts]
+nanoleaf-ctl = "nanoleaf_ctl.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nanoleaf_ctl*"]
