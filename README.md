@@ -20,6 +20,15 @@ device.
 > device temporarily or permanently inoperable, damage hardware, and may
 > affect or void warranty coverage. Use this software at your own risk.
 
+## Dashboard preview
+
+[![NanoLeaf Sunlight Simulator dashboard showing the house, weather, window orientation, and simulated light](docs/assets/dashboard-sunlight-simulator.png)](docs/SCREENSHOTS.md)
+
+The dashboard brings the current daylight simulation, device state, manual
+controls, and diagnostics into one LAN-accessible interface. See the
+[dashboard gallery](docs/SCREENSHOTS.md) for the automation and device-control
+views. Published screenshots use sanitized example values.
+
 ## What it does
 
 - Controls power, brightness, color, color temperature, and saved effects.
@@ -123,6 +132,7 @@ verified procedure.
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Diagnostic procedures for service, device, network, weather, and memory issues |
 | [Security](docs/SECURITY.md) | Token handling, permissions, LAN exposure, service hardening, and SSH access |
 | [Development](docs/DEVELOPMENT.md) | Test workflow, code map, change checklist, and release verification |
+| [Dashboard gallery](docs/SCREENSHOTS.md) | Sanitized screenshots of the sunlight simulator and device controls |
 | [Brand policy](TRADEMARKS.md) | Permitted references to Quicksilver Industries and restrictions on branding forks |
 | [Device safety](SAFETY.md) | Manufacturer instructions, third-party status, operational risks, and warranty notice |
 
