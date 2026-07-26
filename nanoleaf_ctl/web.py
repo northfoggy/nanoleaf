@@ -6,6 +6,7 @@ so you can control everything from your phone.
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import socket
@@ -61,29 +62,55 @@ _watchdog_thread: threading.Thread | None = None
 _file_logger = logging.getLogger("nanoleaf.sunlight")
 _file_logger.setLevel(logging.DEBUG)
 _log_handler = None
+_log_setup_lock = threading.Lock()
+_LOG_MAX_BYTES = 1_000_000
+
+
+def _scrub_existing_log(log_path: str) -> None:
+    """Redact and bound an existing log without loading it all into memory."""
+    if not os.path.exists(log_path):
+        return
+    temp_path = f"{log_path}.scrub"
+    try:
+        size = os.path.getsize(log_path)
+        with open(log_path, "rb") as source:
+            if size > _LOG_MAX_BYTES:
+                source.seek(-_LOG_MAX_BYTES, os.SEEK_END)
+                source.readline()  # Discard a partial first line.
+            existing = source.read(_LOG_MAX_BYTES)
+        redacted = _redact(existing.decode("utf-8", errors="replace"))
+        with open(temp_path, "w", encoding="utf-8", newline="") as target:
+            target.write(redacted)
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, log_path)
+    except OSError:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
 
 
 def _setup_file_logging() -> None:
     """Set up persistent file logging so crashes are traceable."""
     global _log_handler
-    if _log_handler is not None:
-        return
-    log_dir = os.path.expanduser("~/.nanoleaf-ctl")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, "sunlight.log")
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as source:
-                existing = source.read()
-            redacted = _redact(existing)
-            if redacted != existing:
-                with open(log_path, "w", encoding="utf-8") as target:
-                    target.write(redacted)
-        except OSError:
-            pass
-    _log_handler = logging.FileHandler(log_path)
-    _log_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-    _file_logger.addHandler(_log_handler)
+    with _log_setup_lock:
+        if _log_handler is not None:
+            return
+        log_dir = os.path.expanduser("~/.nanoleaf-ctl")
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+        os.chmod(log_dir, 0o700)
+        log_path = os.path.join(log_dir, "sunlight.log")
+        _scrub_existing_log(log_path)
+        _log_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=_LOG_MAX_BYTES,
+            backupCount=3,
+        )
+        os.chmod(log_path, 0o600)
+        _log_handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        _file_logger.addHandler(_log_handler)
 
 
 def _redact(text: object) -> str:

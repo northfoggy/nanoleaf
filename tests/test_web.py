@@ -66,6 +66,24 @@ def test_redact_removes_token_from_urls_and_messages():
     assert redacted.count("[REDACTED]") == 2
 
 
+def test_existing_log_scrub_is_bounded_and_redacted(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "_LOG_MAX_BYTES", 1024)
+    log_path = tmp_path / "sunlight.log"
+    secret = "this-is-the-device-secret"
+    log_path.write_text(
+        ("old entry\n" * 300)
+        + f"http://device/api/v1/{secret}/state failed\n",
+        encoding="utf-8",
+    )
+
+    web._scrub_existing_log(str(log_path))
+
+    scrubbed = log_path.read_text(encoding="utf-8")
+    assert log_path.stat().st_size <= 1024
+    assert secret not in scrubbed
+    assert "[REDACTED]" in scrubbed
+
+
 def test_api_failure_does_not_return_transport_details(monkeypatch):
     secret = "this-is-the-device-secret"
     monkeypatch.setattr(
