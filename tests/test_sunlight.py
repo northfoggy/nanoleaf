@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from nanoleaf_ctl import sunlight
+from nanoleaf_ctl.weather import WeatherState
 
 
 class _Device:
@@ -48,3 +49,20 @@ def test_apply_light_raises_on_http_failure(monkeypatch):
         sunlight.apply_light(
             _Device(), {"mode": "off", "brightness": 0},
         )
+
+
+def test_weather_does_not_turn_night_state_back_on():
+    weather = WeatherState(
+        cloud_cover=100,
+        condition="overcast",
+        is_day=False,
+        timestamp=123.0,
+    )
+
+    state = sunlight.apply_weather(
+        {"mode": "off", "brightness": 0, "phase": "night"}, weather,
+    )
+
+    assert state["mode"] == "off"
+    assert state["brightness"] == 0
+    assert state["weather"] == "overcast"

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "nanoleaf-ctl"
 version = "0.1.0"
 description = "Control Nanoleaf lights from the command line or a web dashboard, with a weather-aware sunlight simulator that mimics natural window light throughout the day."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{ name = "Jason Mitchell" }]
 keywords = ["nanoleaf", "smart-home", "home-automation", "raspberry-pi", "sunlight-simulator", "iot", "lighting"]
@@ -17,6 +17,9 @@ classifiers = [
     "Environment :: Web Environment",
     "Intended Audience :: End Users/Desktop",
 "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Home Automation",
 ]
 dependencies = [

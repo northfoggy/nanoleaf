@@ -7,6 +7,7 @@ so you can control everything from your phone.
 
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -48,6 +49,10 @@ _sim_demo = False                     # True when running in time-lapse demo mod
 _sim_generation = 0                   # incremented on each start; old threads check & exit
 _sim_file_lock = None                 # OS file lock to prevent duplicates
 _device_online = True
+_device_last_seen: float | None = None
+_last_device_error: str | None = None
+_control_mode = "automation"
+_manual_override_until: float | None = None
 _sim_log: deque = deque(maxlen=200)
 _watchdog_stop = threading.Event()
 _watchdog_thread: threading.Thread | None = None
@@ -65,15 +70,59 @@ def _setup_file_logging() -> None:
         return
     log_dir = os.path.expanduser("~/.nanoleaf-ctl")
     os.makedirs(log_dir, exist_ok=True)
-    _log_handler = logging.FileHandler(os.path.join(log_dir, "sunlight.log"))
+    log_path = os.path.join(log_dir, "sunlight.log")
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as source:
+                existing = source.read()
+            redacted = _redact(existing)
+            if redacted != existing:
+                with open(log_path, "w", encoding="utf-8") as target:
+                    target.write(redacted)
+        except OSError:
+            pass
+    _log_handler = logging.FileHandler(log_path)
     _log_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     _file_logger.addHandler(_log_handler)
 
 
+def _redact(text: object) -> str:
+    """Remove Nanoleaf credentials and credential-bearing URLs from text."""
+    value = str(text)
+    value = re.sub(
+        r"(https?://[^\s]+?/api/v1/)[^/\s?]+",
+        r"\1[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"(?i)(auth(?:entication)?[_ -]?token\s*[=:]\s*)[^\s,;]+",
+        r"\1[REDACTED]",
+        value,
+    )
+
+
 def _log(msg: str) -> None:
+    msg = _redact(msg)
     ts = datetime.now().strftime("%H:%M:%S")
     _sim_log.append(f"[{ts}] {msg}")
     _file_logger.info(msg)
+
+
+def _api_failure(exc: Exception, operation: str):
+    """Log useful diagnostics without returning device details to the browser."""
+    _log(f"{operation} failed: {type(exc).__name__}: {exc}")
+    return jsonify({"error": f"Unable to {operation}; check device connectivity"}), 502
+
+
+def _begin_manual_override(minutes: int = 60) -> None:
+    """Pause automation after a person directly changes the lights."""
+    global _control_mode, _manual_override_until
+    with _sim_lock:
+        if _sim_running:
+            _control_mode = "manual_override"
+            _manual_override_until = time.time() + minutes * 60
+            _log(f"Manual override started for {minutes} minutes")
 
 
 def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
@@ -111,13 +160,14 @@ def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
 
 def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
     global _sim_state, _sim_running, _sim_file_lock, _device_online
+    global _device_last_seen, _last_device_error, _control_mode, _manual_override_until
 
     hostname = socket.gethostname()
     last_state_key = None
     last_applied_brightness = None
     mode_label = "DEMO" if demo else "Simulator"
     _log(f"{mode_label} started (gen={my_generation}, host={hostname}, pid={__import__('os').getpid()}) — facing={cfg.facing}, lat={cfg.latitude}, lon={cfg.longitude}, peak={cfg.peak_brightness}")
-    _log(f"Device URL: {nl.url}")
+    _log("Device connection initialized")
 
     # Demo mode: start 1 hour before sunrise, advance 15 min per tick
     if demo:
@@ -153,6 +203,7 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
             if weather:
                 _log(f"Weather: {weather.condition}, cloud={weather.cloud_cover}%")
             state = sunlight.apply_weather(state, weather)
+            state["weather_age_seconds"] = weather_cache.age_seconds
 
         state_key = (state["mode"], state.get("rgb"), state.get("color_temp"), state["brightness"])
 
@@ -160,17 +211,35 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         if not demo and last_applied_brightness is not None and _device_online:
             try:
                 actual_br = _device_get(nl, "/state/brightness").get("value", 0)
+                with _sim_lock:
+                    _device_last_seen = time.time()
                 if abs(actual_br - last_applied_brightness) > 3:
                     _log(f"CONFLICT: device brightness is {actual_br}% but we last set {last_applied_brightness}% — another controller is likely active!")
-            except (_requests.RequestException, OSError, ValueError):
-                pass  # device may be offline, handled below
+            except (_requests.RequestException, OSError, ValueError) as exc:
+                with _sim_lock:
+                    _device_online = False
+                    _last_device_error = _redact(exc)
+                last_state_key = None
+                last_applied_brightness = None
+                _log(f"Device probe failed: {type(exc).__name__}")
 
         with _sim_lock:
             _sim_state = state
 
+        with _sim_lock:
+            if (_control_mode == "manual_override" and _manual_override_until is not None
+                    and time.time() >= _manual_override_until):
+                _control_mode = "automation"
+                _manual_override_until = None
+                last_state_key = None
+                _log("Manual override expired; resuming automation")
+            manual_override = _control_mode == "manual_override" and not demo
+
         applied = False
         try:
-            if not _device_online or state_key != last_state_key:
+            if manual_override:
+                _log("Manual override active, skipping automation apply")
+            elif not _device_online or state_key != last_state_key:
                 _log(f"Applying: {state['mode']} br={state['brightness']} "
                      f"{'rgb=' + str(state.get('rgb')) if state['mode'] == 'color' else 'ct=' + str(state.get('color_temp'))}")
                 transition = 5 if demo else 60
@@ -183,12 +252,15 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
                     if not _device_online:
                         _log("Device reconnected")
                     _device_online = True
+                    _device_last_seen = time.time()
+                    _last_device_error = None
             else:
                 _log("No change, skipping apply")
         except (_requests.RequestException, OSError) as e:
-            _log(f"ERROR applying light: {e}")
+            _log(f"ERROR applying light: {type(e).__name__}: {e}")
             with _sim_lock:
                 _device_online = False
+                _last_device_error = _redact(e)
                 last_state_key = None
                 last_applied_brightness = None
 
@@ -321,7 +393,7 @@ def api_info():
             "effect": info.get("effects", {}).get("select", ""),
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "read device status")
 
 
 @app.route("/api/power", methods=["POST"])
@@ -337,9 +409,10 @@ def api_power():
             current = _device_get(nl, "/state/on").get("value", False)
             _device_put(nl, {"on": {"value": not current}})
         power = _device_get(nl, "/state/on").get("value", False)
+        _begin_manual_override()
         return jsonify({"power": "on" if power else "off"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "change power")
 
 
 @app.route("/api/brightness", methods=["POST"])
@@ -349,9 +422,10 @@ def api_brightness():
         level = request.json.get("level", 50)
         level = max(0, min(100, int(level)))
         _device_put(nl, {"brightness": {"value": level}})
+        _begin_manual_override()
         return jsonify({"brightness": level})
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "change brightness")
 
 
 @app.route("/api/color", methods=["POST"])
@@ -360,11 +434,12 @@ def api_color():
         nl = _get_nl()
         color_str = request.json.get("color", "white")
         client.set_color_from_string(nl, color_str)
+        _begin_manual_override()
         return jsonify({"color": color_str})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "change color")
 
 
 @app.route("/api/color-temp", methods=["POST"])
@@ -374,9 +449,10 @@ def api_color_temp():
         temp = request.json.get("temp", 4000)
         temp = max(1200, min(6500, int(temp)))
         _device_put(nl, {"ct": {"value": temp}})
+        _begin_manual_override()
         return jsonify({"color_temp": temp})
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "change color temperature")
 
 
 @app.route("/api/effects")
@@ -387,7 +463,7 @@ def api_effects():
         current = _device_get(nl, "/effects/select")
         return jsonify({"effects": sorted(effects), "current": current})
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "load effects")
 
 
 @app.route("/api/effect", methods=["POST"])
@@ -402,9 +478,10 @@ def api_effect():
             nl.url + "/effects", json={"select": name}, timeout=sunlight._API_TIMEOUT,
         )
         response.raise_for_status()
+        _begin_manual_override()
         return jsonify({"effect": name})
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return _api_failure(e, "change effect")
 
 
 @app.route("/api/sunlight/status")
@@ -414,8 +491,18 @@ def api_sunlight_status():
         demo = _sim_demo
         state = dict(_sim_state) if _sim_state else None
         online = _device_online
+        last_seen = _device_last_seen
+        control_mode = _control_mode
+        override_until = _manual_override_until
         cfg = _sim_config
-    result = {"running": running, "demo": demo, "device_online": online}
+    result = {
+        "running": running,
+        "demo": demo,
+        "device_online": online,
+        "control_mode": control_mode if running else "stopped",
+        "manual_override_until": override_until,
+        "device_last_seen": last_seen,
+    }
     if state:
         result["state"] = state
     if cfg:
@@ -433,6 +520,7 @@ def api_sunlight_status():
 @app.route("/api/sunlight/start", methods=["POST"])
 def api_sunlight_start():
     global _sim_thread, _sim_config, _sim_running, _sim_demo, _sim_generation, _sim_file_lock
+    global _control_mode, _manual_override_until
 
     with _sim_lock:
         if _sim_running:
@@ -449,7 +537,7 @@ def api_sunlight_start():
     try:
         nl = _get_nl()
     except Exception as exc:
-        return jsonify({"status": "error", "error": str(exc)}), 502
+        return _api_failure(exc, "connect to device")
 
     weather_cache = None
     if not demo and not data.get("no_weather", False):
@@ -472,6 +560,8 @@ def api_sunlight_start():
         _sim_config = cfg
         _sim_running = True
         _sim_demo = demo
+        _control_mode = "automation"
+        _manual_override_until = None
         _sim_generation += 1
         gen = _sim_generation
 
@@ -484,13 +574,39 @@ def api_sunlight_start():
 
 @app.route("/api/sunlight/stop", methods=["POST"])
 def api_sunlight_stop():
-    global _sim_running, _sim_demo
+    global _sim_running, _sim_demo, _control_mode, _manual_override_until
     with _sim_lock:
         _sim_running = False
         _sim_demo = False
+        _control_mode = "stopped"
+        _manual_override_until = None
     # Lock is released in _run_sim_loop when it exits
     _log("Stop requested")
     return jsonify({"status": "stopped"})
+
+
+@app.route("/api/sunlight/resume", methods=["POST"])
+def api_sunlight_resume():
+    """End a manual override and force automation to reconcile next cycle."""
+    global _control_mode, _manual_override_until, _device_online
+    with _sim_lock:
+        if not _sim_running:
+            return jsonify({"status": "error", "error": "Simulator is not running"}), 409
+        _control_mode = "automation"
+        _manual_override_until = None
+        _device_online = False
+    _log("Manual override ended; automation resume requested")
+    return jsonify({"status": "resuming"})
+
+
+@app.route("/api/health")
+def api_health():
+    with _sim_lock:
+        return jsonify({
+            "status": "ok",
+            "simulator_running": _sim_running,
+            "device_online": _device_online,
+        })
 
 
 @app.route("/api/sunlight/log")
@@ -500,16 +616,17 @@ def api_sunlight_log():
 
 @app.route("/api/sunlight/preview")
 def api_sunlight_preview():
-    lat = request.args.get("lat", sunlight.DEFAULT_LAT, type=float)
-    lon = request.args.get("lon", sunlight.DEFAULT_LON, type=float)
-    tz = request.args.get("tz", sunlight.DEFAULT_TZ)
-    facing = request.args.get("facing", sunlight.DEFAULT_FACING)
-    peak = request.args.get("peak", sunlight.DEFAULT_PEAK, type=int)
-
-    cfg = sunlight.WindowConfig(
-        latitude=lat, longitude=lon, timezone=tz,
-        facing=facing, peak_brightness=peak,
-    )
+    try:
+        cfg = _build_window_config({
+            "lat": request.args.get("lat", sunlight.DEFAULT_LAT),
+            "lon": request.args.get("lon", sunlight.DEFAULT_LON),
+            "tz": request.args.get("tz", sunlight.DEFAULT_TZ),
+            "facing": request.args.get("facing", sunlight.DEFAULT_FACING),
+            "peak": request.args.get("peak", sunlight.DEFAULT_PEAK),
+            "bias": request.args.get("bias", 0),
+        })
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
     states = sunlight.preview_day(cfg)
     return jsonify(states)
 
@@ -525,14 +642,15 @@ _HTML = """\
 <title>Nanoleaf Control</title>
 <style>
   :root {
-    --bg: #1a1a2e;
-    --card: #16213e;
-    --accent: #0f3460;
-    --text: #e0e0e0;
-    --text2: #a0a0b0;
-    --glow: #e94560;
-    --green: #4ecca3;
-    --border: #2a2a4a;
+    --bg: #111827;
+    --card: #1b2535;
+    --accent: #27364b;
+    --text: #f7f3e8;
+    --text2: #b8c0cc;
+    --glow: #e8954f;
+    --green: #68d5ad;
+    --red: #ff7185;
+    --border: #35445a;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -554,7 +672,7 @@ _HTML = """\
     display: grid;
     grid-template-columns: 1fr;
     gap: 16px;
-    max-width: 600px;
+    max-width: 1080px;
     margin: 0 auto;
   }
   .card {
@@ -563,6 +681,18 @@ _HTML = """\
     border-radius: 12px;
     padding: 18px;
   }
+  .automation-card { order: -1; }
+  .status-strip {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
+  }
+  .status-pill {
+    min-height: 32px; display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+    color: var(--text2); font-size: .82em; background: rgba(255,255,255,.025);
+  }
+  .status-pill strong { color: var(--text); }
+  .offline { color: var(--red) !important; border-color: var(--red) !important; }
+  .override { color: #ffd080 !important; border-color: #bd8640 !important; }
   .card h2 {
     font-size: 0.85em;
     text-transform: uppercase;
@@ -635,7 +765,7 @@ _HTML = """\
     margin-bottom: 10px;
   }
   .color-swatch {
-    width: 32px; height: 32px;
+    width: 44px; height: 44px; padding: 0;
     border-radius: 50%;
     border: 2px solid var(--border);
     cursor: pointer;
@@ -672,7 +802,7 @@ _HTML = """\
     gap: 6px;
   }
   .effect-chip {
-    padding: 5px 12px;
+    min-height: 44px; padding: 8px 14px;
     border-radius: 16px;
     font-size: 0.82em;
     background: var(--accent);
@@ -740,6 +870,7 @@ _HTML = """\
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text);
+    min-height: 44px;
     padding: 8px 16px;
     font-size: 0.85em;
     cursor: pointer;
@@ -758,11 +889,18 @@ _HTML = """\
     color: #1a1a2e;
     font-weight: 600;
   }
+  button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 3px solid #ffd080; outline-offset: 3px;
+  }
   .btn-row { display: flex; gap: 8px; }
   /* Timeline */
   .timeline {
-    max-height: 260px;
-    overflow-y: auto;
+    height: 150px;
+    display: grid;
+    grid-template-columns: repeat(48, minmax(0, 1fr));
+    align-items: end;
+    gap: 2px;
+    overflow: hidden;
     font-size: 0.78em;
     font-family: monospace;
     line-height: 1.5;
@@ -771,13 +909,15 @@ _HTML = """\
     scrollbar-color: var(--border) transparent;
   }
   .timeline .t-row { display: flex; gap: 8px; }
+  .timeline .t-row { min-width: 0; align-items: end; height: 100%; }
+  .timeline .t-row span:not(.t-bar) { display: none; }
   .timeline .t-time { min-width: 42px; color: var(--text2); }
   .timeline .t-phase { min-width: 90px; }
   .timeline .t-value { flex: 1; }
   .timeline .t-br { min-width: 36px; text-align: right; }
   .timeline .t-bar {
-    width: 30px;
-    height: 12px;
+    width: 100%;
+    min-height: 3px;
     border-radius: 3px;
     display: inline-block;
     vertical-align: middle;
@@ -803,6 +943,17 @@ _HTML = """\
     opacity: 1;
   }
   .toast.error { border-color: var(--glow); }
+  .diagnostics { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+  @media (min-width: 800px) {
+    .grid { grid-template-columns: 1fr 1fr; }
+    .automation-card { grid-column: 1 / -1; }
+  }
+  @media (max-width: 520px) {
+    body { padding: 12px; }
+    .card { padding: 15px; }
+    .sim-form { grid-template-columns: 1fr; }
+    .btn-row { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
@@ -815,7 +966,7 @@ _HTML = """\
   <div class="card" id="card-info">
     <h2>Device</h2>
     <div class="power-row">
-      <button class="power-btn" id="powerBtn" onclick="togglePower()" title="Toggle power">&#x23FB;</button>
+      <button class="power-btn" id="powerBtn" onclick="togglePower()" title="Toggle power" aria-label="Toggle Nanoleaf power">&#x23FB;</button>
       <span class="power-label" id="powerLabel">--</span>
     </div>
     <div class="info-grid" id="infoGrid">
@@ -831,15 +982,15 @@ _HTML = """\
   <div class="card">
     <h2>Brightness &amp; Color Temperature</h2>
     <div class="slider-row">
-      <label>Brightness</label>
+      <label for="brSlider">Brightness</label>
       <input type="range" id="brSlider" min="0" max="100" value="50"
              oninput="document.getElementById('brVal').textContent=this.value+'%'"
              onchange="setBrightness(this.value)">
       <span class="val" id="brVal">50%</span>
     </div>
     <div class="slider-row">
-      <label>Color Temp</label>
-      <input type="range" id="ctSlider" min="1200" max="6500" step="100" value="4000"
+      <label for="ctSlider">Color Temp</label>
+      <input type="range" id="ctSlider" min="1200" max="6500" step="1" value="4000"
              oninput="document.getElementById('ctVal').textContent=this.value+'K'"
              onchange="setColorTemp(this.value)">
       <span class="val" id="ctVal">4000K</span>
@@ -851,8 +1002,8 @@ _HTML = """\
     <h2>Color</h2>
     <div class="color-presets" id="colorPresets"></div>
     <div class="color-input-row">
-      <input type="color" id="colorPicker" value="#ffffff" onchange="setColor(this.value)">
-      <input type="text" id="colorText" placeholder="red, #ff0000, 255,0,0">
+      <input type="color" id="colorPicker" value="#ffffff" aria-label="Custom color" onchange="setColor(this.value)">
+      <input type="text" id="colorText" aria-label="Color name or value" placeholder="red, #ff0000, 255,0,0">
       <button onclick="setColor(document.getElementById('colorText').value)">Set</button>
     </div>
   </div>
@@ -864,8 +1015,13 @@ _HTML = """\
   </div>
 
   <!-- Sunlight Simulator -->
-  <div class="card">
+  <div class="card automation-card">
     <h2>Window Light Simulator</h2>
+    <div class="status-strip" aria-live="polite">
+      <span class="status-pill" id="deviceStatus"><strong>Device</strong> Checking</span>
+      <span class="status-pill" id="controlStatus"><strong>Control</strong> Checking</span>
+      <span class="status-pill" id="weatherStatus"><strong>Weather</strong> Checking</span>
+    </div>
     <div class="sim-status">
       <span class="dot" id="simDot"></span>
       <span id="simLabel">Stopped</span>
@@ -874,15 +1030,15 @@ _HTML = """\
     <div class="sim-detail" id="simDetail"></div>
     <div class="sim-form" id="simForm">
       <div>
-        <label>Latitude</label>
+        <label for="simLat">Latitude</label>
         <input type="number" id="simLat" value="34.13" step="0.01">
       </div>
       <div>
-        <label>Longitude</label>
+        <label for="simLon">Longitude</label>
         <input type="number" id="simLon" value="-84.34" step="0.01">
       </div>
       <div>
-        <label>Facing</label>
+        <label for="simFacing">Facing</label>
         <select id="simFacing">
           <option value="north">North</option>
           <option value="northeast">Northeast</option>
@@ -895,11 +1051,11 @@ _HTML = """\
         </select>
       </div>
       <div>
-        <label>Peak Brightness</label>
+        <label for="simPeak">Peak Brightness</label>
         <input type="number" id="simPeak" value="75" min="1" max="100">
       </div>
       <div>
-        <label>Brightness Bias</label>
+        <label for="simBias">Brightness Bias</label>
         <input type="number" id="simBias" value="0" min="-50" max="50">
       </div>
     </div>
@@ -907,18 +1063,19 @@ _HTML = """\
       <button class="green" id="simStartBtn" onclick="startSim()">Start</button>
       <button class="primary" id="simDemoBtn" onclick="startDemo()">Demo</button>
       <button id="simStopBtn" onclick="stopSim()" style="display:none">Stop</button>
+      <button id="simResumeBtn" onclick="resumeSim()" style="display:none">Resume automation</button>
       <button onclick="loadPreview()">Preview Day</button>
     </div>
     <div class="timeline" id="timeline" style="display:none; margin-top: 14px;"></div>
-    <div style="margin-top: 14px;">
-      <button onclick="toggleLog()">Toggle Log</button>
+    <div class="diagnostics">
+      <button onclick="toggleLog()" aria-controls="simLog" aria-expanded="false" id="logBtn">Diagnostics</button>
     </div>
     <pre class="sim-log" id="simLog" style="display:none; max-height:300px; overflow-y:auto; background:#111; color:#0f0; padding:10px; font-size:12px; margin-top:8px; border-radius:6px; white-space:pre-wrap;"></pre>
   </div>
 
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 const COLORS = [
@@ -940,16 +1097,19 @@ const COLORS = [
 (function init() {
   const presets = document.getElementById('colorPresets');
   COLORS.forEach(c => {
-    const el = document.createElement('div');
+    const el = document.createElement('button');
+    el.type = 'button';
     el.className = 'color-swatch';
     el.style.background = c.hex;
     el.title = c.name;
+    el.setAttribute('aria-label', 'Set color to ' + c.name);
     el.onclick = () => setColor(c.name);
     presets.appendChild(el);
   });
   refresh();
   loadEffects();
   setInterval(pollSim, 5000);
+  setInterval(refresh, 15000);
   pollSim();
 })();
 
@@ -1002,6 +1162,10 @@ async function refresh() {
     }
     document.getElementById('brSlider').value = d.brightness;
     document.getElementById('brVal').textContent = d.brightness + '%';
+    if (d.color_temp) {
+      document.getElementById('ctSlider').value = d.color_temp;
+      document.getElementById('ctVal').textContent = d.color_temp + 'K';
+    }
   } catch(e) {}
 }
 
@@ -1052,7 +1216,8 @@ async function loadEffects() {
     const el = document.getElementById('effectsList');
     el.innerHTML = '';
     d.effects.forEach(name => {
-      const chip = document.createElement('span');
+      const chip = document.createElement('button');
+      chip.type = 'button';
       chip.className = 'effect-chip' + (name === d.current ? ' active' : '');
       chip.textContent = name;
       chip.onclick = () => setEffect(name);
@@ -1100,6 +1265,12 @@ async function stopSim() {
   pollSim();
 }
 
+async function resumeSim() {
+  await post('/api/sunlight/resume', {});
+  toast('Automation resuming');
+  pollSim();
+}
+
 function stateColor(s) {
   if (!s) return '#333';
   if (s.mode === 'color' && s.rgb) {
@@ -1126,11 +1297,38 @@ async function pollSim() {
     const startBtn = document.getElementById('simStartBtn');
     const demoBtn = document.getElementById('simDemoBtn');
     const stopBtn = document.getElementById('simStopBtn');
+    const resumeBtn = document.getElementById('simResumeBtn');
     const form = document.getElementById('simForm');
+    const deviceStatus = document.getElementById('deviceStatus');
+    const controlStatus = document.getElementById('controlStatus');
+    const weatherStatus = document.getElementById('weatherStatus');
+
+    deviceStatus.className = 'status-pill' + (d.device_online ? '' : ' offline');
+    deviceStatus.innerHTML = '<strong>Device</strong> ' + (d.device_online ? 'Online' : 'Offline');
+    const overriding = d.control_mode === 'manual_override';
+    controlStatus.className = 'status-pill' + (overriding ? ' override' : '');
+    if (overriding && d.manual_override_until) {
+      const until = new Date(d.manual_override_until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+      controlStatus.innerHTML = '<strong>Control</strong> Manual until ' + until;
+    } else {
+      controlStatus.innerHTML = '<strong>Control</strong> ' + (d.running ? 'Automation' : 'Stopped');
+    }
+    resumeBtn.style.display = overriding ? '' : 'none';
+
+    const age = d.state && d.state.weather_age_seconds;
+    if (d.state && d.state.weather) {
+      const stale = age === null || age > 1800;
+      weatherStatus.className = 'status-pill' + (stale ? ' override' : '');
+      weatherStatus.innerHTML = '<strong>Weather</strong> ' + d.state.weather.replaceAll('_', ' ') +
+        (stale ? ' (stale)' : '');
+    } else {
+      weatherStatus.className = 'status-pill';
+      weatherStatus.innerHTML = '<strong>Weather</strong> Unavailable';
+    }
 
     if (d.running) {
-      dot.classList.add('running');
-      label.textContent = d.demo ? 'Demo' : 'Running';
+      dot.classList.toggle('running', d.device_online && !overriding);
+      label.textContent = !d.device_online ? 'Device offline' : (overriding ? 'Manual override' : (d.demo ? 'Demo' : 'Running'));
       startBtn.style.display = 'none';
       demoBtn.style.display = 'none';
       stopBtn.style.display = '';
@@ -1152,7 +1350,7 @@ async function pollSim() {
       }
       if (d.config) {
         const prefix = d.demo ? 'Demo' : 'Running';
-        label.textContent = prefix + ' (' + d.config.facing + '-facing)';
+        if (d.device_online && !overriding) label.textContent = prefix + ' (' + d.config.facing + '-facing)';
       }
     } else {
       dot.classList.remove('running');
@@ -1160,6 +1358,7 @@ async function pollSim() {
       startBtn.style.display = '';
       demoBtn.style.display = '';
       stopBtn.style.display = 'none';
+      resumeBtn.style.display = 'none';
       form.style.display = '';
       detail.innerHTML = '';
       preview.style.background = '#333';
@@ -1192,6 +1391,9 @@ async function loadPreview() {
         '<span class="t-phase">' + s.phase + '</span>' +
         '<span class="t-value">' + val + '</span>' +
         '<span class="t-br">' + s.brightness + '%</span>';
+      row.title = s.time + ' — ' + s.phase + ', ' + s.brightness + '%';
+      row.setAttribute('aria-label', row.title);
+      row.querySelector('.t-bar').style.height = Math.max(3, s.brightness) + '%';
       el.appendChild(row);
     });
   } catch(e) {}
@@ -1205,6 +1407,7 @@ let _logTimer = null;
 function toggleLog() {
   const el = document.getElementById('simLog');
   _logVisible = !_logVisible;
+  document.getElementById('logBtn').setAttribute('aria-expanded', String(_logVisible));
   el.style.display = _logVisible ? '' : 'none';
   if (_logVisible) {
     refreshLog();
@@ -1232,6 +1435,7 @@ async function refreshLog() {
 def _auto_start_simulator() -> None:
     """Start the sunlight simulator automatically on launch."""
     global _sim_thread, _sim_config, _sim_running, _sim_generation, _sim_file_lock
+    global _control_mode, _manual_override_until
 
     with _sim_lock:
         if _sim_running:
@@ -1258,6 +1462,8 @@ def _auto_start_simulator() -> None:
 
         _sim_config = cfg
         _sim_running = True
+        _control_mode = "automation"
+        _manual_override_until = None
         _sim_generation += 1
         gen = _sim_generation
 

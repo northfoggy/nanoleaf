@@ -302,6 +302,11 @@ def apply_weather(state: dict, weather) -> dict:
         return state
 
     state = dict(state)  # don't mutate the original
+    if state["mode"] == "off" or state.get("brightness", 0) == 0:
+        state["weather"] = weather.condition
+        state["cloud_cover"] = weather.cloud_cover
+        state["weather_timestamp"] = weather.timestamp
+        return state
     cloud = weather.cloud_factor  # 0.0 clear → 1.0 overcast
     condition = weather.condition
 
@@ -341,6 +346,7 @@ def apply_weather(state: dict, weather) -> dict:
     # Add weather info to state for logging
     state["weather"] = condition
     state["cloud_cover"] = weather.cloud_cover
+    state["weather_timestamp"] = weather.timestamp
 
     return state
 
@@ -453,8 +459,12 @@ def run_simulator(
                 if abs(actual_br - last_applied_brightness) > 3 and on_update:
                     on_update({"phase": "CONFLICT", "mode": "warning", "brightness": actual_br,
                                "conflict_detail": f"device={actual_br}% vs last_set={last_applied_brightness}%"})
-            except (requests.RequestException, OSError, ValueError):
-                pass
+            except (requests.RequestException, OSError, ValueError) as e:
+                device_online = False
+                last_state = None
+                last_applied_brightness = None
+                if on_disconnect:
+                    on_disconnect(str(e))
 
         state_key = (state["mode"], state.get("rgb"), state.get("color_temp"), state["brightness"])
         try:

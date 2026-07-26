@@ -103,11 +103,13 @@ class WeatherCache:
         self.refresh_interval = refresh_interval
         self._cached: WeatherState | None = None
         self._last_fetch: float = 0
+        self._last_attempt: float = 0
 
     def get(self) -> WeatherState | None:
         """Get current weather, fetching if stale."""
         now = time.time()
-        if now - self._last_fetch >= self.refresh_interval:
+        if now - self._last_attempt >= self.refresh_interval:
+            self._last_attempt = now
             try:
                 self._cached = fetch_weather(self.lat, self.lon)
                 self._last_fetch = now
@@ -115,3 +117,10 @@ class WeatherCache:
                 # Network down or API issue — use cached data
                 pass
         return self._cached
+
+    @property
+    def age_seconds(self) -> float | None:
+        """Age of the last successful observation, or None before first success."""
+        if self._cached is None:
+            return None
+        return max(0.0, time.time() - self._cached.timestamp)
