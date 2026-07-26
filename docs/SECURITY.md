@@ -72,7 +72,7 @@ by default.
 
 The included unit applies:
 
-- `User=northfoggy`: no root application process;
+- `User=nanoleaf`: a dedicated, non-root application process;
 - `NoNewPrivileges=true`: the process cannot gain privileges;
 - `PrivateTmp=true`: a private temporary directory;
 - `ProtectSystem=strict`: system paths are read-only;
@@ -86,22 +86,22 @@ These settings limit host impact but do not authenticate dashboard users.
 ## SSH administration
 
 Use a dedicated key rather than sharing a password. Keep its private half
-outside the repository. The current deployment key is labeled
-`codex-nanoserver` in `authorized_keys`.
+outside the repository, and give its public-key entry a distinctive label such
+as `nanoserver-admin` in `authorized_keys`.
 
 To find the public-key entry without displaying unrelated keys:
 
 ```bash
-grep 'codex-nanoserver' "$HOME/.ssh/authorized_keys"
+grep 'nanoserver-admin' "$HOME/.ssh/authorized_keys"
 ```
 
 To revoke it, edit `authorized_keys` and remove only that labeled line. Confirm
 another administrative login works before ending the existing session.
 
-The `northfoggy` account currently permits non-interactive sudo. That is
-effectively full host administration and should be granted only on a personally
-controlled machine. A future hardening step could replace broad sudo with a
-small allowlist for service management and journal reads.
+Do not grant the application service account broad, non-interactive sudo. If
+automation requires privileged service management or journal reads, use a
+small command allowlist and keep general host administration under a separate
+account.
 
 ## Logs and diagnostics
 

@@ -46,7 +46,7 @@ Verify the unit and executable:
 
 ```bash
 sudo systemd-analyze verify /etc/systemd/system/nanoleaf.service
-test -x /home/northfoggy/nanoleaf/venv/bin/nanoleaf-ctl
+test -x /home/nanoleaf/nanoleaf/venv/bin/nanoleaf-ctl
 stat -c '%a %U %G %n' \
   "$HOME/.config/nanoleaf-ctl" \
   "$HOME/.nanoleaf-ctl"

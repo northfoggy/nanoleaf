@@ -139,7 +139,7 @@ backup.
 
 ## SSH access
 
-The current host can be reached as `northfoggy@nanoserver` using a dedicated
+Connect as the deployment host's designated administrator using a dedicated
 SSH key. Keep private keys outside the repository. To revoke a key, remove only
 its matching public-key line from `~/.ssh/authorized_keys`, then test a separate
 working login before closing the administrative session.
