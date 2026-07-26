@@ -122,6 +122,53 @@ def test_direct_control_starts_override_and_resume_clears_it(monkeypatch):
     assert web._device_online is False
 
 
+def test_manual_override_pauses_demo_without_applying(monkeypatch):
+    applied = []
+    sleeps = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_sim_generation", 17)
+    monkeypatch.setattr(web, "_control_mode", "manual_override")
+    monkeypatch.setattr(web, "_manual_override_until", web.time.time() + 3600)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(
+        web.sunlight,
+        "_sun_times",
+        lambda cfg: {"sunrise": None},
+    )
+    monkeypatch.setattr(
+        web.sunlight,
+        "compute_window_light",
+        lambda cfg, now: {
+            "phase": "daylight",
+            "mode": "color_temp",
+            "color_temp": 5000,
+            "brightness": 50,
+        },
+    )
+    monkeypatch.setattr(
+        web.sunlight,
+        "apply_light",
+        lambda *args, **kwargs: applied.append((args, kwargs)),
+    )
+
+    def stop_after_pause(seconds):
+        sleeps.append(seconds)
+        monkeypatch.setattr(web, "_sim_running", False)
+
+    monkeypatch.setattr(web.time, "sleep", stop_after_pause)
+
+    web._run_sim_loop_inner(
+        object(),
+        web.sunlight.WindowConfig(),
+        weather_cache=None,
+        my_generation=17,
+        demo=True,
+    )
+
+    assert applied == []
+    assert sleeps == [5]
+
+
 def test_health_endpoint_reports_process_and_device_state(monkeypatch):
     monkeypatch.setattr(web, "_sim_running", True)
     monkeypatch.setattr(web, "_device_online", False)

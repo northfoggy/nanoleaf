@@ -66,7 +66,8 @@ Expected private paths:
 | `~/.ssh/authorized_keys` on the Pi | `600` |
 
 The systemd service sets `UMask=0077`, so new service-created files are private
-by default.
+by default. In the reference service deployment, `HOME=/var/lib/nanoleaf`, so
+the application paths in this table live beneath that private state directory.
 
 ## Systemd hardening
 

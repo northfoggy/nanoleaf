@@ -46,10 +46,10 @@ Verify the unit and executable:
 
 ```bash
 sudo systemd-analyze verify /etc/systemd/system/nanoleaf.service
-test -x /home/nanoleaf/nanoleaf/venv/bin/nanoleaf-ctl
-stat -c '%a %U %G %n' \
-  "$HOME/.config/nanoleaf-ctl" \
-  "$HOME/.nanoleaf-ctl"
+test -x /opt/nanoleaf/venv/bin/nanoleaf-ctl
+sudo stat -c '%a %U %G %n' \
+  /var/lib/nanoleaf/.config/nanoleaf-ctl \
+  /var/lib/nanoleaf/.nanoleaf-ctl
 ```
 
 ## Dashboard cannot connect
@@ -105,7 +105,7 @@ The intended production state is one system service and one web process. The
 lock file can identify a local simulator holder:
 
 ```bash
-cat "$HOME/.config/nanoleaf-ctl/sunlight.lock"
+sudo cat /var/lib/nanoleaf/.config/nanoleaf-ctl/sunlight.lock
 ```
 
 The lock contains only `hostname:pid`, not the token.
@@ -123,7 +123,7 @@ Check current memory and logs:
 
 ```bash
 free -h
-ls -lh "$HOME/.nanoleaf-ctl"/sunlight.log*
+sudo ls -lh /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log*
 pid="$(systemctl show nanoleaf.service -p MainPID --value)"
 ps -o pid=,etimes=,rss=,vsz=,nlwp=,pcpu=,stat=,comm= -p "$pid"
 ```
@@ -133,9 +133,9 @@ memory. If an older deployment left a very large file, stop the service and move
 the file to a private quarantine location before upgrading:
 
 ```bash
-mv "$HOME/.nanoleaf-ctl/sunlight.log" \
-  "$HOME/.nanoleaf-ctl/sunlight.log.quarantine"
-chmod 600 "$HOME/.nanoleaf-ctl/sunlight.log.quarantine"
+sudo mv /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log \
+  /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log.quarantine
+sudo chmod 600 /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log.quarantine
 ```
 
 Do not delete a quarantined log until deciding whether its diagnostic history
@@ -200,5 +200,5 @@ echo '=== MEMORY ==='
 free -h
 
 echo '=== LOG FILES ==='
-ls -lh "$HOME/.nanoleaf-ctl"/sunlight.log*
+sudo ls -lh /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log*
 ```

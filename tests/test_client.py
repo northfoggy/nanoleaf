@@ -26,6 +26,20 @@ def test_color_write_raises_on_http_failure(monkeypatch):
         client.set_color_from_string(_Device(), "red")
 
 
+def test_black_color_turns_device_off(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_put",
+        lambda nl, path, payload=None: calls.append((nl, path, payload)),
+    )
+
+    device = _Device()
+    client.set_color_from_string(device, "#000000")
+
+    assert calls == [(device, "/state", {"on": {"value": False}})]
+
+
 def test_pair_uses_timeout_and_saves_token(monkeypatch):
     calls = {}
 

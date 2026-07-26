@@ -74,8 +74,8 @@ sudo journalctl -u nanoleaf.service -f
 Simulator calculation and device logs:
 
 ```bash
-tail -n 100 "$HOME/.nanoleaf-ctl/sunlight.log"
-ls -lh "$HOME/.nanoleaf-ctl"/sunlight.log*
+sudo tail -n 100 /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log
+sudo ls -lh /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log*
 ```
 
 The dashboard Diagnostics control exposes the latest 200 in-memory simulator
@@ -108,7 +108,7 @@ Use systemd as the only production launcher.
 free -h
 pid="$(systemctl show nanoleaf.service -p MainPID --value)"
 ps -o pid=,etimes=,rss=,vsz=,nlwp=,pcpu=,stat=,comm= -p "$pid"
-ls -lh "$HOME/.nanoleaf-ctl"/sunlight.log*
+sudo ls -lh /var/lib/nanoleaf/.nanoleaf-ctl/sunlight.log*
 ```
 
 A normal steady-state process has historically used roughly 40 MB RSS. Treat

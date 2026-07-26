@@ -86,8 +86,9 @@ command.
 The included `nanoleaf.service` uses a generic dedicated service account:
 
 - user: `nanoleaf`
-- checkout: `/home/nanoleaf/nanoleaf`
-- virtual environment: `/home/nanoleaf/nanoleaf/venv`
+- checkout: `/opt/nanoleaf`
+- virtual environment: `/opt/nanoleaf/venv`
+- private state: `/var/lib/nanoleaf`
 - dashboard: port `5000`
 
 Replace `OWNER` in the clone URL with the repository owner. If the deployment
