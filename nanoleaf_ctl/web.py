@@ -706,6 +706,11 @@ _HTML = """\
     text-align: center; color: var(--text2); font-size: .78em;
     letter-spacing: .08em; text-transform: uppercase; margin-bottom: 20px;
   }
+  .legal-notice {
+    max-width: 1080px; margin: 18px auto 0; color: var(--text2);
+    font-size: .78em; line-height: 1.5; text-align: center;
+  }
+  .legal-notice a { color: var(--glow); }
   .grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -1186,6 +1191,14 @@ _HTML = """\
     <pre class="sim-log" id="simLog" style="display:none; max-height:300px; overflow-y:auto; background:#111; color:#0f0; padding:10px; font-size:12px; margin-top:8px; border-radius:6px; white-space:pre-wrap;"></pre>
   </div>
 
+</div>
+
+<div class="legal-notice">
+  Independent experimental software; not affiliated with, sponsored, endorsed,
+  authorized, or supported by Nanoleaf Canada Ltd. Follow
+  <a href="https://support.nanoleaf.me/hc/en-us" target="_blank" rel="noopener noreferrer">official Nanoleaf instructions</a>
+  for your model before making changes. Third-party control can cause unexpected
+  operation or damage and may affect warranty coverage. Use at your own risk.
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
