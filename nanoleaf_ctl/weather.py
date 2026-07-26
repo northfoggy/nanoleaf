@@ -4,11 +4,10 @@ Fetches current cloud cover and weather conditions to modulate
 the window light simulation.
 """
 
-import json
 import time
-import urllib.request
-import urllib.error
 from dataclasses import dataclass
+
+import requests
 
 # Open-Meteo WMO weather codes → simplified condition
 # https://open-meteo.com/en/docs
@@ -76,9 +75,9 @@ def fetch_weather(lat: float, lon: float) -> WeatherState:
         f"?latitude={lat}&longitude={lon}"
         f"&current=cloud_cover,weather_code,is_day"
     )
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read())
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
 
     current = data["current"]
     weather_code = current.get("weather_code", 0)
@@ -112,7 +111,7 @@ class WeatherCache:
             try:
                 self._cached = fetch_weather(self.lat, self.lon)
                 self._last_fetch = now
-            except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError):
+            except (requests.RequestException, OSError, ValueError, KeyError):
                 # Network down or API issue — use cached data
                 pass
         return self._cached

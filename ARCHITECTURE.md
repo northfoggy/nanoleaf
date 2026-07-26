@@ -84,7 +84,7 @@ The simulator runs as a background thread with generation-based lifecycle manage
 
 ### config.py — Persistence and Locking
 
-Configuration (device IP, auth token) is stored in `~/.config/nanoleaf-ctl/config.json`. A file-based exclusive lock (`fcntl.flock`) at `~/.config/nanoleaf-ctl/sunlight.lock` prevents multiple simulator instances on the same machine. The lock file records `hostname:pid` for diagnostics.
+Configuration (device IP, auth token) is stored in `~/.config/nanoleaf-ctl/config.json` using atomic, owner-only writes. An OS-level exclusive lock (`fcntl.flock` on Linux, `msvcrt.locking` on Windows) at `~/.config/nanoleaf-ctl/sunlight.lock` prevents multiple simulator instances on the same machine. The lock file records `hostname:pid` for diagnostics.
 
 ### client.py — Device Communication
 
@@ -134,9 +134,11 @@ On the Raspberry Pi (nanoserver):
 Multiple safeguards prevent duplicate controllers from fighting:
 
 1. **Thread-level**: `threading.Lock` around the start endpoint prevents race conditions from concurrent HTTP requests
-2. **Process-level**: `fcntl.flock` exclusive lock prevents CLI and web instances from running simultaneously on the same machine
+2. **Process-level**: an OS-level exclusive file lock prevents CLI and web instances from running simultaneously on the same machine
 3. **Conflict detection**: Each cycle reads back the device brightness — if it differs from what was last set, a `CONFLICT` warning is logged
 4. **Hostname logging**: Lock file and startup logs include `hostname:pid` for cross-machine diagnostics
+
+The systemd watchdog is fed by a dedicated process-liveness thread, independent of simulator state. Stopping the simulator from the dashboard therefore leaves the web service healthy and stopped rather than triggering a watchdog restart.
 
 ## Dependencies
 

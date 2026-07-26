@@ -26,6 +26,9 @@ dependencies = [
     "flask>=3.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
 [project.urls]
 Homepage = "https://github.com/northfoggy/nanoleaf"
 Issues = "https://github.com/northfoggy/nanoleaf/issues"
@@ -35,3 +38,6 @@ nanoleaf-ctl = "nanoleaf_ctl.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["nanoleaf_ctl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

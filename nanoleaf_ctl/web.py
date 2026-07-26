@@ -5,7 +5,6 @@ and monitoring the sunlight simulator. Runs on the local network
 so you can control everything from your phone.
 """
 
-import json
 import logging
 import os
 import socket
@@ -13,7 +12,11 @@ import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
+
+import requests as _requests
 from flask import Flask, request, jsonify, Response
+from werkzeug.serving import make_server
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from nanoleaf_ctl import client, config, sunlight
 from nanoleaf_ctl.weather import WeatherCache
@@ -27,8 +30,11 @@ def _sd_notify(state: str) -> None:
     import socket as _sock
     if addr.startswith("@"):
         addr = "\0" + addr[1:]
-    with _sock.socket(_sock.AF_UNIX, _sock.SOCK_DGRAM) as s:
-        s.sendto(state.encode(), addr)
+    try:
+        with _sock.socket(_sock.AF_UNIX, _sock.SOCK_DGRAM) as s:
+            s.sendto(state.encode(), addr)
+    except OSError:
+        pass
 
 
 # ── Shared state for the sunlight simulator thread ──────────────────
@@ -40,9 +46,11 @@ _sim_config: sunlight.WindowConfig | None = None
 _sim_running = False
 _sim_demo = False                     # True when running in time-lapse demo mode
 _sim_generation = 0                   # incremented on each start; old threads check & exit
-_sim_file_lock = None                 # fcntl lock fd to prevent duplicates
+_sim_file_lock = None                 # OS file lock to prevent duplicates
 _device_online = True
 _sim_log: deque = deque(maxlen=200)
+_watchdog_stop = threading.Event()
+_watchdog_thread: threading.Thread | None = None
 
 
 _file_logger = logging.getLogger("nanoleaf.sunlight")
@@ -74,7 +82,7 @@ def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
     In demo mode, cycles through a full 24h day in ~8 minutes:
     each tick advances simulated time by 15 minutes, with 5s real intervals.
     """
-    global _sim_state, _sim_running, _sim_file_lock, _device_online
+    global _sim_state, _sim_running, _sim_demo, _sim_file_lock, _device_online
 
     _setup_file_logging()
     try:
@@ -87,11 +95,15 @@ def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
             _sim_running = False
             _sim_demo = False
 
-    # Only release the lock if we're still the current generation
-    # (if superseded, the new thread owns the lock now)
-    if _sim_generation == my_generation:
-        config.release_sunlight_lock(_sim_file_lock)
-        _sim_file_lock = None
+    with _sim_lock:
+        if _sim_generation == my_generation:
+            lock_fd = _sim_file_lock
+            _sim_file_lock = None
+        else:
+            lock_fd = None
+
+    if lock_fd is not None:
+        config.release_sunlight_lock(lock_fd)
         _log("Simulator stopped")
     else:
         _log(f"Simulator gen={my_generation} exiting (superseded by gen={_sim_generation})")
@@ -147,11 +159,10 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         # Conflict detection: read back device brightness and compare to what we last set
         if not demo and last_applied_brightness is not None and _device_online:
             try:
-                import requests
-                actual_br = requests.get(nl.url + "/state/brightness", timeout=sunlight._API_TIMEOUT).json().get("value", 0)
+                actual_br = _device_get(nl, "/state/brightness").get("value", 0)
                 if abs(actual_br - last_applied_brightness) > 3:
                     _log(f"CONFLICT: device brightness is {actual_br}% but we last set {last_applied_brightness}% — another controller is likely active!")
-            except Exception:
+            except (_requests.RequestException, OSError, ValueError):
                 pass  # device may be offline, handled below
 
         with _sim_lock:
@@ -174,7 +185,7 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
                     _device_online = True
             else:
                 _log("No change, skipping apply")
-        except Exception as e:
+        except (_requests.RequestException, OSError) as e:
             _log(f"ERROR applying light: {e}")
             with _sim_lock:
                 _device_online = False
@@ -198,9 +209,6 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         else:
             sleep_secs = 60
 
-        # Ping systemd watchdog — we're alive and looping
-        _sd_notify("WATCHDOG=1")
-
         _log(f"Sleeping {sleep_secs}s")
         # Sleep in short intervals so we can exit promptly on stop/supersede
         for _ in range(sleep_secs):
@@ -212,15 +220,77 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
 # ── Flask app ───────────────────────────────────────────────────────
 
 app = Flask(__name__)
-# Store a reference to the Nanoleaf connection used by routes
 _nl = None
+_nl_lock = threading.Lock()
 
 
 def _get_nl():
     global _nl
-    if _nl is None:
-        _nl = client.connect()
-    return _nl
+    with _nl_lock:
+        if _nl is None:
+            _nl = client.connect()
+        return _nl
+
+
+
+def _device_put(nl, payload: dict) -> None:
+    """PUT to device state with timeout protection."""
+    response = _requests.put(nl.url + "/state", json=payload, timeout=sunlight._API_TIMEOUT)
+    response.raise_for_status()
+
+
+def _device_get(nl, path: str = "") -> dict:
+    """GET from device with timeout protection."""
+    url = nl.url + path if path else nl.url
+    response = _requests.get(url, timeout=sunlight._API_TIMEOUT)
+    response.raise_for_status()
+    return response.json()
+
+
+def _device_effects(nl) -> list[str]:
+    response = _requests.get(
+        nl.url + "/effects/effectsList", timeout=sunlight._API_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _build_window_config(data: dict) -> sunlight.WindowConfig:
+    """Validate dashboard input and return a simulator configuration."""
+    latitude = float(data.get("lat", sunlight.DEFAULT_LAT))
+    longitude = float(data.get("lon", sunlight.DEFAULT_LON))
+    peak = int(data.get("peak", sunlight.DEFAULT_PEAK))
+    bias = int(data.get("bias", 0))
+    timezone_name = str(data.get("tz", sunlight.DEFAULT_TZ))
+    facing = str(data.get("facing", sunlight.DEFAULT_FACING)).lower()
+
+    if not -90 <= latitude <= 90:
+        raise ValueError("Latitude must be between -90 and 90")
+    if not -180 <= longitude <= 180:
+        raise ValueError("Longitude must be between -180 and 180")
+    if not 1 <= peak <= 100:
+        raise ValueError("Peak brightness must be between 1 and 100")
+    if not -50 <= bias <= 50:
+        raise ValueError("Brightness bias must be between -50 and 50")
+    if facing not in {
+        "north", "northeast", "east", "southeast",
+        "south", "southwest", "west", "northwest",
+    }:
+        raise ValueError("Invalid window orientation")
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Unknown timezone '{timezone_name}'") from exc
+
+    return sunlight.WindowConfig(
+        latitude=latitude,
+        longitude=longitude,
+        timezone=timezone_name,
+        facing=facing,
+        peak_brightness=peak,
+        night_off=not bool(data.get("night_glow", False)),
+        brightness_bias=bias,
+    )
 
 
 # ── API routes ──────────────────────────────────────────────────────
@@ -234,8 +304,22 @@ def index():
 def api_info():
     try:
         nl = _get_nl()
-        info = client.get_info(nl)
-        return jsonify(info)
+        info = _device_get(nl)
+        state = info.get("state", {})
+        on = state.get("on", {}).get("value", False)
+        br = state.get("brightness", {}).get("value", 0)
+        ct = state.get("ct", {}).get("value", 0)
+        return jsonify({
+            "name": info.get("name", "Unknown"),
+            "model": info.get("model", "Unknown"),
+            "serial": info.get("serialNo", "Unknown"),
+            "firmware": info.get("firmwareVersion", "Unknown"),
+            "num_panels": info.get("panelLayout", {}).get("layout", {}).get("numPanels", "?"),
+            "power": on,
+            "brightness": br,
+            "color_temp": ct,
+            "effect": info.get("effects", {}).get("select", ""),
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -246,13 +330,14 @@ def api_power():
         nl = _get_nl()
         action = request.json.get("action", "toggle")
         if action == "on":
-            nl.power_on()
+            _device_put(nl, {"on": {"value": True}})
         elif action == "off":
-            nl.power_off()
+            _device_put(nl, {"on": {"value": False}})
         else:
-            nl.toggle_power()
-        state = "on" if nl.get_power() else "off"
-        return jsonify({"power": state})
+            current = _device_get(nl, "/state/on").get("value", False)
+            _device_put(nl, {"on": {"value": not current}})
+        power = _device_get(nl, "/state/on").get("value", False)
+        return jsonify({"power": "on" if power else "off"})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -263,7 +348,7 @@ def api_brightness():
         nl = _get_nl()
         level = request.json.get("level", 50)
         level = max(0, min(100, int(level)))
-        nl.set_brightness(level)
+        _device_put(nl, {"brightness": {"value": level}})
         return jsonify({"brightness": level})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
@@ -288,7 +373,7 @@ def api_color_temp():
         nl = _get_nl()
         temp = request.json.get("temp", 4000)
         temp = max(1200, min(6500, int(temp)))
-        nl.set_color_temp(temp)
+        _device_put(nl, {"ct": {"value": temp}})
         return jsonify({"color_temp": temp})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
@@ -298,8 +383,8 @@ def api_color_temp():
 def api_effects():
     try:
         nl = _get_nl()
-        effects = nl.list_effects()
-        current = nl.get_current_effect()
+        effects = _device_effects(nl)
+        current = _device_get(nl, "/effects/select")
         return jsonify({"effects": sorted(effects), "current": current})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
@@ -310,10 +395,13 @@ def api_effect():
     try:
         nl = _get_nl()
         name = request.json.get("name", "")
-        available = nl.list_effects()
-        if name not in available:
+        effects = _device_effects(nl)
+        if name not in effects:
             return jsonify({"error": f"Effect '{name}' not found"}), 404
-        nl.set_effect(name)
+        response = _requests.put(
+            nl.url + "/effects", json={"select": name}, timeout=sunlight._API_TIMEOUT,
+        )
+        response.raise_for_status()
         return jsonify({"effect": name})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
@@ -346,14 +434,33 @@ def api_sunlight_status():
 def api_sunlight_start():
     global _sim_thread, _sim_config, _sim_running, _sim_demo, _sim_generation, _sim_file_lock
 
-    # Thread-safe check-and-start: hold _sim_lock for the entire operation
-    # to prevent two concurrent requests from both starting a loop
     with _sim_lock:
         if _sim_running:
             _log("Start requested but already running")
             return jsonify({"status": "already running"})
 
-        # Acquire exclusive lock — prevents fighting with CLI instance
+    data = request.get_json(silent=True) or {}
+    demo = bool(data.get("demo", False))
+    try:
+        cfg = _build_window_config(data)
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 400
+
+    try:
+        nl = _get_nl()
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 502
+
+    weather_cache = None
+    if not demo and not data.get("no_weather", False):
+        weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
+
+    # Recheck after potentially slow setup, then claim both locks atomically.
+    with _sim_lock:
+        if _sim_running:
+            _log("Start requested but already running")
+            return jsonify({"status": "already running"})
+
         _sim_file_lock = config.acquire_sunlight_lock()
         if _sim_file_lock is None:
             holder = config.read_lock_info() or "unknown"
@@ -361,26 +468,7 @@ def api_sunlight_start():
             return jsonify({"status": "error", "error": f"Another sunlight instance is already running (held by {holder}). Stop it first."}), 409
 
         _sim_log.clear()
-        data = request.json or {}
-        demo = bool(data.get("demo", False))
         _log(f"Start request: {data}")
-        cfg = sunlight.WindowConfig(
-            latitude=data.get("lat", 34.13),
-            longitude=data.get("lon", -84.34),
-            timezone=data.get("tz", "America/New_York"),
-            facing=data.get("facing", "southwest"),
-            peak_brightness=data.get("peak", 75),
-            night_off=not data.get("night_glow", False),
-            brightness_bias=max(-50, min(50, int(data.get("bias", 0)))),
-        )
-
-        # Skip weather in demo mode — we want to see pure sun phases
-        weather_cache = None
-        if not demo and not data.get("no_weather", False):
-            weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
-
-        nl = _get_nl()
-
         _sim_config = cfg
         _sim_running = True
         _sim_demo = demo
@@ -412,11 +500,11 @@ def api_sunlight_log():
 
 @app.route("/api/sunlight/preview")
 def api_sunlight_preview():
-    lat = request.args.get("lat", 34.13, type=float)
-    lon = request.args.get("lon", -84.34, type=float)
-    tz = request.args.get("tz", "America/New_York")
-    facing = request.args.get("facing", "southwest")
-    peak = request.args.get("peak", 75, type=int)
+    lat = request.args.get("lat", sunlight.DEFAULT_LAT, type=float)
+    lon = request.args.get("lon", sunlight.DEFAULT_LON, type=float)
+    tz = request.args.get("tz", sunlight.DEFAULT_TZ)
+    facing = request.args.get("facing", sunlight.DEFAULT_FACING)
+    peak = request.args.get("peak", sunlight.DEFAULT_PEAK, type=int)
 
     cfg = sunlight.WindowConfig(
         latitude=lat, longitude=lon, timezone=tz,
@@ -1149,15 +1237,24 @@ def _auto_start_simulator() -> None:
         if _sim_running:
             return
 
+    cfg = sunlight.WindowConfig(brightness_bias=-5)
+    weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
+    try:
+        nl = _get_nl()
+    except Exception as exc:
+        _setup_file_logging()
+        _file_logger.error("Auto-start: unable to connect to device: %s", exc)
+        return
+
+    with _sim_lock:
+        if _sim_running:
+            return
+
         _sim_file_lock = config.acquire_sunlight_lock()
         if _sim_file_lock is None:
             _setup_file_logging()
             _file_logger.info("Auto-start: lock held by another instance, skipping")
             return
-
-        cfg = sunlight.WindowConfig(brightness_bias=-5)
-        weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
-        nl = _get_nl()
 
         _sim_config = cfg
         _sim_running = True
@@ -1172,11 +1269,44 @@ def _auto_start_simulator() -> None:
     _file_logger.info("Auto-started sunlight simulator (bias=-5)")
 
 
+def _watchdog_loop(interval: float) -> None:
+    while not _watchdog_stop.wait(interval):
+        _sd_notify("WATCHDOG=1")
+
+
+def _start_watchdog() -> None:
+    """Feed systemd's watchdog independently of simulator state."""
+    global _watchdog_thread
+    watchdog_usec = os.environ.get("WATCHDOG_USEC")
+    watchdog_pid = os.environ.get("WATCHDOG_PID")
+    try:
+        if not watchdog_usec or (watchdog_pid and int(watchdog_pid) != os.getpid()):
+            return
+        interval = max(1.0, int(watchdog_usec) / 2_000_000)
+    except ValueError:
+        return
+    _watchdog_stop.clear()
+    _watchdog_thread = threading.Thread(
+        target=_watchdog_loop,
+        args=(interval,),
+        daemon=True,
+        name="systemd-watchdog",
+    )
+    _watchdog_thread.start()
+
+
 def run(host: str = "0.0.0.0", port: int = 5000, ip: str | None = None):
     """Start the web interface."""
     global _nl
     if ip:
         _nl = client.connect(ip)
-    _sd_notify("READY=1")
+    server = make_server(host, port, app, threaded=True)
     _auto_start_simulator()
-    app.run(host=host, port=port, debug=False)
+    _start_watchdog()
+    _sd_notify("READY=1")
+    try:
+        server.serve_forever()
+    finally:
+        _watchdog_stop.set()
+        _sd_notify("STOPPING=1")
+        server.server_close()

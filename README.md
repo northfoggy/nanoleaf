@@ -27,7 +27,8 @@ pip install .
 Or for development:
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"
+python -m pytest
 ```
 
 ## Quick start

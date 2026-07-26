@@ -11,25 +11,31 @@ happening outside your window.
 """
 
 import colorsys
-import json
 import time
 from datetime import datetime, date, timedelta, timezone
 from dataclasses import dataclass
 
 import requests
 from astral import LocationInfo
-from astral.sun import sun, noon as solar_noon, elevation, azimuth, golden_hour, blue_hour
+from astral.sun import sun, noon as solar_noon, elevation, azimuth
 from nanoleafapi import Nanoleaf
+from zoneinfo import ZoneInfo
+
+DEFAULT_LAT = 34.13
+DEFAULT_LON = -84.34
+DEFAULT_TZ = "America/New_York"
+DEFAULT_FACING = "southwest"
+DEFAULT_PEAK = 75
 
 
 @dataclass
 class WindowConfig:
     """Configuration for the window simulation."""
-    latitude: float = 34.13        # default: north Georgia
-    longitude: float = -84.34
-    timezone: str = "America/New_York"
-    facing: str = "southwest"     # n, ne, e, se, s, sw, w, nw
-    peak_brightness: int = 75     # windows diffuse light; 100% feels artificial
+    latitude: float = DEFAULT_LAT
+    longitude: float = DEFAULT_LON
+    timezone: str = DEFAULT_TZ
+    facing: str = DEFAULT_FACING
+    peak_brightness: int = DEFAULT_PEAK
     night_off: bool = True        # turn off at night vs dim warm glow
     brightness_bias: int = 0      # -50 to +50, added to computed brightness
 
@@ -44,6 +50,16 @@ class WindowConfig:
 # (sunrise, sunset, blue hour) and set_color_temp (Kelvin) for the
 # neutral midday period when window light is essentially white.
 
+def _make_location(cfg: WindowConfig) -> LocationInfo:
+    return LocationInfo(
+        name="home",
+        region="",
+        timezone=cfg.timezone,
+        latitude=cfg.latitude,
+        longitude=cfg.longitude,
+    )
+
+
 def _sun_times(cfg: WindowConfig, dt: date | None = None) -> dict:
     """Get sun event times for the configured location.
 
@@ -53,43 +69,24 @@ def _sun_times(cfg: WindowConfig, dt: date | None = None) -> dict:
     raises ``ValueError``.  We only need ``noon`` (and occasionally
     ``sunrise``), so fall back to computing them individually.
     """
-    loc = LocationInfo(
-        name="home",
-        region="",
-        timezone=cfg.timezone,
-        latitude=cfg.latitude,
-        longitude=cfg.longitude,
-    )
+    loc = _make_location(cfg)
     if dt is None:
         dt = date.today()
     try:
         return sun(loc.observer, date=dt)
     except ValueError:
-        # Build a partial dict with the events we actually use.
         return {"noon": solar_noon(loc.observer, date=dt)}
 
 
 def _solar_elevation(cfg: WindowConfig, dt: datetime | None = None) -> float:
-    """Get current solar elevation in degrees."""
-    loc = LocationInfo(
-        name="home", region="",
-        timezone=cfg.timezone,
-        latitude=cfg.latitude,
-        longitude=cfg.longitude,
-    )
+    loc = _make_location(cfg)
     if dt is None:
         dt = datetime.now(timezone.utc)
     return elevation(loc.observer, dt)
 
 
 def _solar_azimuth(cfg: WindowConfig, dt: datetime | None = None) -> float:
-    """Get current solar azimuth in degrees (0=N, 90=E, 180=S, 270=W)."""
-    loc = LocationInfo(
-        name="home", region="",
-        timezone=cfg.timezone,
-        latitude=cfg.latitude,
-        longitude=cfg.longitude,
-    )
+    loc = _make_location(cfg)
     if dt is None:
         dt = datetime.now(timezone.utc)
     return azimuth(loc.observer, dt)
@@ -164,7 +161,8 @@ def compute_window_light(
     elev = _solar_elevation(cfg, dt)
     az = _solar_azimuth(cfg, dt)
     facing = _facing_factor(cfg, az)
-    times = _sun_times(cfg, dt.date())
+    local_date = dt.astimezone(ZoneInfo(cfg.timezone)).date()
+    times = _sun_times(cfg, local_date)
 
     # Determine solar phase and base light properties
     # Elevation ranges:
@@ -350,6 +348,12 @@ def apply_weather(state: dict, weather) -> dict:
 _API_TIMEOUT = 10  # seconds; prevents silent hangs on unresponsive device
 
 
+def _checked_response(response):
+    """Raise on HTTP errors and return the response for optional decoding."""
+    response.raise_for_status()
+    return response
+
+
 def apply_light(nl: Nanoleaf, state: dict, transition: int = 0) -> None:
     """Apply a computed light state to the Nanoleaf.
 
@@ -363,12 +367,18 @@ def apply_light(nl: Nanoleaf, state: dict, transition: int = 0) -> None:
     br = state["brightness"]
 
     if mode == "off" or br == 0:
-        requests.put(nl.url + "/state", json={"on": {"value": False}}, timeout=_API_TIMEOUT)
+        _checked_response(requests.put(
+            nl.url + "/state", json={"on": {"value": False}}, timeout=_API_TIMEOUT,
+        ))
         return
 
-    power = requests.get(nl.url + "/state/on", timeout=_API_TIMEOUT).json()
+    power = _checked_response(
+        requests.get(nl.url + "/state/on", timeout=_API_TIMEOUT)
+    ).json()
     if not power.get("value", False):
-        requests.put(nl.url + "/state", json={"on": {"value": True}}, timeout=_API_TIMEOUT)
+        _checked_response(requests.put(
+            nl.url + "/state", json={"on": {"value": True}}, timeout=_API_TIMEOUT,
+        ))
 
     if mode == "color":
         r, g, b = state["rgb"]
@@ -381,20 +391,19 @@ def apply_light(nl: Nanoleaf, state: dict, transition: int = 0) -> None:
             "sat": {"value": int(s * 100)},
             "brightness": {"value": br, "duration": transition},
         }
-        requests.put(nl.url + "/state", json=data, timeout=_API_TIMEOUT)
+        _checked_response(requests.put(nl.url + "/state", json=data, timeout=_API_TIMEOUT))
     elif mode == "color_temp":
         data = {
             "ct": {"value": state["color_temp"]},
             "brightness": {"value": br, "duration": transition},
         }
-        requests.put(nl.url + "/state", json=data, timeout=_API_TIMEOUT)
+        _checked_response(requests.put(nl.url + "/state", json=data, timeout=_API_TIMEOUT))
 
 
 def preview_day(cfg: WindowConfig) -> list[dict]:
     """Generate a preview of the full day's light states, one per 30 minutes."""
-    today = date.today()
-    import zoneinfo
-    tz = zoneinfo.ZoneInfo(cfg.timezone)
+    tz = ZoneInfo(cfg.timezone)
+    today = datetime.now(tz).date()
 
     results = []
     for half_hour in range(48):
@@ -438,11 +447,13 @@ def run_simulator(
         # Conflict detection: if another controller changed the brightness, warn
         if last_applied_brightness is not None and device_online:
             try:
-                actual_br = requests.get(nl.url + "/state/brightness", timeout=_API_TIMEOUT).json().get("value", 0)
+                actual_br = _checked_response(
+                    requests.get(nl.url + "/state/brightness", timeout=_API_TIMEOUT)
+                ).json().get("value", 0)
                 if abs(actual_br - last_applied_brightness) > 3 and on_update:
                     on_update({"phase": "CONFLICT", "mode": "warning", "brightness": actual_br,
                                "conflict_detail": f"device={actual_br}% vs last_set={last_applied_brightness}%"})
-            except Exception:
+            except (requests.RequestException, OSError, ValueError):
                 pass
 
         state_key = (state["mode"], state.get("rgb"), state.get("color_temp"), state["brightness"])
@@ -460,7 +471,7 @@ def run_simulator(
                 elif on_update:
                     on_update(state)
 
-        except (OSError, ConnectionError, Exception) as e:
+        except (requests.RequestException, OSError) as e:
             # Device unreachable — switch probably turned off
             if device_online:
                 device_online = False
