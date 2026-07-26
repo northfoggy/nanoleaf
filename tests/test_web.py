@@ -112,3 +112,16 @@ def test_health_endpoint_reports_process_and_device_state(monkeypatch):
     assert response.get_json() == {
         "status": "ok", "simulator_running": True, "device_online": False,
     }
+
+
+def test_dashboard_includes_branding_and_dynamic_house_scene():
+    response = web.app.test_client().get("/")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "NanoLeaf Sunlight Simulator" in html
+    assert "by Quicksilver Industries LTD." in html
+    assert 'id="houseGraphic"' in html
+    assert 'id="sceneLocation"' in html
+    assert 'id="sceneOrientation"' in html
+    assert 'id="sceneWeather"' in html

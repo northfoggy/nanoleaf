@@ -639,7 +639,7 @@ _HTML = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nanoleaf Control</title>
+<title>NanoLeaf Sunlight Simulator — Quicksilver Industries LTD.</title>
 <style>
   :root {
     --bg: #111827;
@@ -664,10 +664,14 @@ _HTML = """\
     text-align: center;
     font-size: 1.4em;
     font-weight: 600;
-    margin-bottom: 20px;
+    margin-bottom: 2px;
     color: var(--text);
   }
   h1 span { color: var(--glow); }
+  .brand-byline {
+    text-align: center; color: var(--text2); font-size: .78em;
+    letter-spacing: .08em; text-transform: uppercase; margin-bottom: 20px;
+  }
   .grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -682,6 +686,41 @@ _HTML = """\
     padding: 18px;
   }
   .automation-card { order: -1; }
+  .sim-hero {
+    display: grid; grid-template-columns: minmax(220px, 300px) 1fr;
+    gap: 20px; align-items: center; margin-bottom: 16px;
+  }
+  .house-scene {
+    position: relative; overflow: hidden; border: 1px solid var(--border);
+    border-radius: 12px; background: #17263a; min-height: 176px;
+  }
+  .house-scene svg { display: block; width: 100%; height: auto; }
+  .scene-sky { fill: #203b5b; transition: fill 1s ease; }
+  .scene-ground { fill: #233c35; }
+  .scene-sun { fill: #ffd080; transition: opacity 1s ease; }
+  .scene-cloud { fill: #c8d1da; opacity: .88; }
+  .scene-rain { stroke: #78b8e6; stroke-width: 3; stroke-linecap: round; }
+  .scene-weather-cloud, .scene-weather-rain { opacity: 0; transition: opacity .5s ease; }
+  .house-scene[data-weather="cloud"] .scene-weather-cloud,
+  .house-scene[data-weather="rain"] .scene-weather-cloud,
+  .house-scene[data-weather="rain"] .scene-weather-rain { opacity: 1; }
+  .house-scene[data-weather="cloud"] .scene-sun { opacity: .35; }
+  .house-scene[data-weather="rain"] .scene-sun { opacity: .12; }
+  .scene-house { fill: #e5ddd0; stroke: #111827; stroke-width: 3; }
+  .scene-roof { fill: #a85f4d; stroke: #111827; stroke-width: 3; }
+  .scene-door { fill: #665044; }
+  .scene-window { fill: #ffd080; stroke: #111827; stroke-width: 3; transition: fill 1s ease, opacity 1s ease; }
+  .scene-compass { fill: rgba(17,24,39,.88); stroke: var(--border); stroke-width: 1; }
+  .scene-needle { fill: var(--glow); transform-origin: 211px 124px; transition: transform .6s ease; }
+  .scene-north { fill: var(--text); font: 700 8px sans-serif; text-anchor: middle; }
+  .scene-copy { min-width: 0; }
+  .scene-kicker { color: var(--glow); font-size: .78em; text-transform: uppercase; letter-spacing: .1em; }
+  .scene-title { font-size: 1.55em; line-height: 1.15; margin: 5px 0 12px; }
+  .scene-facts { display: grid; gap: 8px; }
+  .scene-fact { display: grid; grid-template-columns: 22px 92px 1fr; gap: 7px; align-items: baseline; font-size: .88em; }
+  .scene-fact .fact-icon { color: var(--glow); text-align: center; }
+  .scene-fact .fact-label { color: var(--text2); }
+  .scene-fact .fact-value { color: var(--text); font-weight: 600; min-width: 0; }
   .status-strip {
     display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
   }
@@ -953,12 +992,16 @@ _HTML = """\
     .card { padding: 15px; }
     .sim-form { grid-template-columns: 1fr; }
     .btn-row { flex-wrap: wrap; }
+    .sim-hero { grid-template-columns: 1fr; gap: 14px; }
+    .house-scene { min-height: 0; }
+    .scene-title { font-size: 1.3em; }
   }
 </style>
 </head>
 <body>
 
-<h1><span>nanoleaf</span>-ctl</h1>
+<h1><span>NanoLeaf</span> Sunlight Simulator</h1>
+<div class="brand-byline">by Quicksilver Industries LTD.</div>
 
 <div class="grid">
 
@@ -1017,6 +1060,42 @@ _HTML = """\
   <!-- Sunlight Simulator -->
   <div class="card automation-card">
     <h2>Window Light Simulator</h2>
+    <div class="sim-hero">
+      <div class="house-scene" id="houseScene" data-weather="clear">
+        <svg viewBox="0 0 240 150" role="img" id="houseGraphic" aria-label="Configured home and current simulated sunlight">
+          <rect class="scene-sky" width="240" height="112" rx="10" />
+          <circle class="scene-sun" cx="42" cy="35" r="17" />
+          <g class="scene-weather-cloud">
+            <circle class="scene-cloud" cx="61" cy="39" r="13" />
+            <circle class="scene-cloud" cx="77" cy="31" r="18" />
+            <circle class="scene-cloud" cx="96" cy="40" r="14" />
+            <rect class="scene-cloud" x="60" y="39" width="39" height="13" rx="6" />
+          </g>
+          <g class="scene-weather-rain">
+            <line x1="67" y1="57" x2="63" y2="66" /><line x1="81" y1="57" x2="77" y2="66" /><line x1="95" y1="57" x2="91" y2="66" />
+          </g>
+          <rect class="scene-ground" y="111" width="240" height="39" />
+          <path class="scene-house" d="M62 74h100v61H62z" />
+          <path class="scene-roof" d="M51 78l61-48 61 48z" />
+          <rect class="scene-door" x="75" y="101" width="23" height="34" rx="2" />
+          <rect class="scene-window" id="sceneWindow" x="119" y="91" width="28" height="25" rx="2" />
+          <path d="M133 91v25M119 103.5h28" stroke="#111827" stroke-width="2" />
+          <circle class="scene-compass" cx="211" cy="124" r="20" />
+          <text class="scene-north" x="211" y="109">N</text>
+          <path class="scene-needle" id="sceneNeedle" d="M211 108l5 16-5 10-5-10z" />
+        </svg>
+      </div>
+      <div class="scene-copy" aria-live="polite">
+        <div class="scene-kicker">Your configured daylight</div>
+        <div class="scene-title" id="sceneTitle">Reading the sky…</div>
+        <div class="scene-facts">
+          <div class="scene-fact"><span class="fact-icon" aria-hidden="true">⌖</span><span class="fact-label">Location</span><span class="fact-value" id="sceneLocation">—</span></div>
+          <div class="scene-fact"><span class="fact-icon" aria-hidden="true">↗</span><span class="fact-label">Orientation</span><span class="fact-value" id="sceneOrientation">—</span></div>
+          <div class="scene-fact"><span class="fact-icon" aria-hidden="true">☁</span><span class="fact-label">Weather</span><span class="fact-value" id="sceneWeather">—</span></div>
+          <div class="scene-fact"><span class="fact-icon" aria-hidden="true">☀</span><span class="fact-label">Light</span><span class="fact-value" id="sceneLight">—</span></div>
+        </div>
+      </div>
+    </div>
     <div class="status-strip" aria-live="polite">
       <span class="status-pill" id="deviceStatus"><strong>Device</strong> Checking</span>
       <span class="status-pill" id="controlStatus"><strong>Control</strong> Checking</span>
@@ -1287,6 +1366,64 @@ function stateColor(s) {
   return '#222';
 }
 
+const FACING_ANGLES = {
+  north: 0, northeast: 45, east: 90, southeast: 135,
+  south: 180, southwest: 225, west: 270, northwest: 315,
+};
+
+function formatCoordinate(value, positive, negative) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return Math.abs(number).toFixed(2) + '° ' + (number >= 0 ? positive : negative);
+}
+
+function updateHouseScene(d) {
+  const cfg = d.config || simCfg();
+  const s = d.state;
+  const facing = (cfg.facing || 'southwest').toLowerCase();
+  const weather = s && s.weather ? s.weather.replaceAll('_', ' ') : 'unavailable';
+  const rawWeather = s && s.weather ? s.weather : '';
+  const rainy = /rain|drizzle|thunder/.test(rawWeather);
+  const cloudy = rainy || /cloud|overcast|fog|snow/.test(rawWeather);
+  const scene = document.getElementById('houseScene');
+  const graphic = document.getElementById('houseGraphic');
+  const windowEl = document.getElementById('sceneWindow');
+  const sky = scene.querySelector('.scene-sky');
+
+  scene.dataset.weather = rainy ? 'rain' : (cloudy ? 'cloud' : 'clear');
+  document.getElementById('sceneNeedle').style.transform =
+    'rotate(' + (FACING_ANGLES[facing] || 0) + 'deg)';
+  document.getElementById('sceneLocation').textContent =
+    formatCoordinate(cfg.latitude, 'N', 'S') + ', ' + formatCoordinate(cfg.longitude, 'E', 'W');
+  document.getElementById('sceneOrientation').textContent =
+    facing.charAt(0).toUpperCase() + facing.slice(1) + '-facing window';
+  document.getElementById('sceneWeather').textContent = s && s.weather
+    ? weather + ' · ' + s.cloud_cover + '% cloud cover'
+    : 'Weather unavailable';
+
+  if (s) {
+    const lightValue = s.mode === 'color_temp' ? s.color_temp + 'K' :
+      (s.mode === 'color' ? 'Color light' : 'Lights off');
+    document.getElementById('sceneTitle').textContent =
+      s.phase.charAt(0).toUpperCase() + s.phase.slice(1) + ' at ' + s.brightness + '%';
+    document.getElementById('sceneLight').textContent = lightValue + ' · ' + s.brightness + '% brightness';
+    windowEl.style.fill = stateColor(s);
+    windowEl.style.opacity = Math.max(.18, s.brightness / 100);
+    sky.style.fill = /night/.test(s.phase) ? '#101a35' :
+      (/dawn|sunrise|golden/.test(s.phase) ? '#76516a' : '#203b5b');
+  } else {
+    document.getElementById('sceneTitle').textContent = d.running ? 'Calculating daylight…' : 'Automation is stopped';
+    document.getElementById('sceneLight').textContent = 'No current simulation';
+    windowEl.style.fill = '#526174';
+    windowEl.style.opacity = .35;
+  }
+
+  graphic.setAttribute('aria-label',
+    'House at ' + document.getElementById('sceneLocation').textContent + ', ' +
+    facing + '-facing window, weather ' + weather +
+    (s ? ', simulated ' + s.phase + ' at ' + s.brightness + ' percent brightness' : ''));
+}
+
 async function pollSim() {
   try {
     const d = await api('/api/sunlight/status');
@@ -1302,6 +1439,8 @@ async function pollSim() {
     const deviceStatus = document.getElementById('deviceStatus');
     const controlStatus = document.getElementById('controlStatus');
     const weatherStatus = document.getElementById('weatherStatus');
+
+    updateHouseScene(d);
 
     deviceStatus.className = 'status-pill' + (d.device_online ? '' : ' offline');
     deviceStatus.innerHTML = '<strong>Device</strong> ' + (d.device_online ? 'Online' : 'Offline');
