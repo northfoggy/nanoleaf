@@ -1,7 +1,28 @@
 __pycache__/
+.pytest_cache/
 *.pyc
 *.egg-info/
 dist/
 build/
 .venv/
 *.egg
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+config.json
+credentials.json
+secrets.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+authorized_keys
+known_hosts
+
+# Runtime state and logs
+sunlight.log*
+*.log

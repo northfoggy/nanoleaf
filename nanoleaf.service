@@ -11,6 +11,12 @@ ExecStart=/home/northfoggy/nanoleaf/venv/bin/nanoleaf-ctl web --port 5000
 Restart=always
 RestartSec=5
 WatchdogSec=120
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/northfoggy/.nanoleaf-ctl /home/northfoggy/.config/nanoleaf-ctl
 
 [Install]
 WantedBy=multi-user.target

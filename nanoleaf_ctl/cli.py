@@ -22,7 +22,6 @@ Usage:
 
 import argparse
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -89,22 +88,21 @@ def cmd_info(args):
 
 def cmd_on(args):
     nl = client.connect(args.ip)
-    nl.power_on()
+    client.set_power(nl, True)
     print("Powered on.")
     return 0
 
 
 def cmd_off(args):
     nl = client.connect(args.ip)
-    nl.power_off()
+    client.set_power(nl, False)
     print("Powered off.")
     return 0
 
 
 def cmd_toggle(args):
     nl = client.connect(args.ip)
-    nl.toggle_power()
-    state = "on" if nl.get_power() else "off"
+    state = "on" if client.toggle_power(nl) else "off"
     print(f"Toggled. Now {state}.")
     return 0
 
@@ -115,7 +113,7 @@ def cmd_brightness(args):
     if level < 0 or level > 100:
         print("Brightness must be between 0 and 100.")
         return 1
-    nl.set_brightness(level)
+    client.set_brightness(nl, level)
     print(f"Brightness set to {level}%.")
     return 0
 
@@ -138,15 +136,15 @@ def cmd_color_temp(args):
     if temp < 1200 or temp > 6500:
         print("Color temperature must be between 1200 and 6500.")
         return 1
-    nl.set_color_temp(temp)
+    client.set_color_temp(nl, temp)
     print(f"Color temperature set to {temp}K.")
     return 0
 
 
 def cmd_effects(args):
     nl = client.connect(args.ip)
-    effects = nl.list_effects()
-    current = nl.get_current_effect()
+    effects = client.list_effects(nl)
+    current = client.get_current_effect(nl)
     print(f"Available effects ({len(effects)}):")
     for name in sorted(effects):
         marker = " *" if name == current else ""
@@ -157,13 +155,13 @@ def cmd_effects(args):
 def cmd_effect(args):
     nl = client.connect(args.ip)
     name = args.name
-    available = nl.list_effects()
+    available = client.list_effects(nl)
     if name not in available:
         print(f"Effect '{name}' not found. Available effects:")
         for eff in sorted(available):
             print(f"  {eff}")
         return 1
-    nl.set_effect(name)
+    client.set_effect(nl, name)
     print(f"Effect set to '{name}'.")
     return 0
 
@@ -276,7 +274,7 @@ def cmd_sunlight(args):
 
 def cmd_identify(args):
     nl = client.connect(args.ip)
-    nl.identify()
+    client.identify(nl)
     print("Identifying... (panels should flash)")
     return 0
 
@@ -306,20 +304,20 @@ def cmd_install(args):
         "--log", str(log_path),
     ]
     # Pass through sunlight options if non-default
-    if args.lat != 34.13:
+    if args.lat != sunlight.DEFAULT_LAT:
         cmd_args.extend(["--lat", str(args.lat)])
-    if args.lon != -84.34:
+    if args.lon != sunlight.DEFAULT_LON:
         cmd_args.extend(["--lon", str(args.lon)])
-    if args.facing != "southwest":
+    if args.facing != sunlight.DEFAULT_FACING:
         cmd_args.extend(["--facing", args.facing])
-    if args.peak != 75:
+    if args.peak != sunlight.DEFAULT_PEAK:
         cmd_args.extend(["--peak", str(args.peak)])
     if args.night_glow:
         cmd_args.append("--night-glow")
     if args.no_weather:
         cmd_args.append("--no-weather")
 
-    command_str = " ".join(cmd_args)
+    command_str = subprocess.list2cmdline(cmd_args)
 
     # Create scheduled task that runs at user logon
     schtasks_cmd = [
@@ -434,14 +432,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # sunlight
     p = sub.add_parser("sunlight", help="Run window light simulator")
-    p.add_argument("--lat", type=float, default=34.13, help="Latitude (default 34.13)")
-    p.add_argument("--lon", type=float, default=-84.34, help="Longitude (default -84.34)")
-    p.add_argument("--tz", default="America/New_York", help="Timezone (default America/New_York)")
-    p.add_argument("--facing", default="southwest",
+    p.add_argument("--lat", type=float, default=sunlight.DEFAULT_LAT, help=f"Latitude (default {sunlight.DEFAULT_LAT})")
+    p.add_argument("--lon", type=float, default=sunlight.DEFAULT_LON, help=f"Longitude (default {sunlight.DEFAULT_LON})")
+    p.add_argument("--tz", default=sunlight.DEFAULT_TZ, help=f"Timezone (default {sunlight.DEFAULT_TZ})")
+    p.add_argument("--facing", default=sunlight.DEFAULT_FACING,
                     choices=["north", "northeast", "east", "southeast",
                              "south", "southwest", "west", "northwest"],
-                    help="Window orientation (default south)")
-    p.add_argument("--peak", type=int, default=75, help="Peak brightness %% (default 75)")
+                    help=f"Window orientation (default {sunlight.DEFAULT_FACING})")
+    p.add_argument("--peak", type=int, default=sunlight.DEFAULT_PEAK, help=f"Peak brightness %% (default {sunlight.DEFAULT_PEAK})")
     p.add_argument("--night-glow", action="store_true", help="Keep a dim warm glow at night instead of off")
     p.add_argument("--interval", type=int, default=60, help="Update interval in seconds (default 60)")
     p.add_argument("--preview", action="store_true", help="Show full day schedule without running")
@@ -450,13 +448,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # install
     p = sub.add_parser("install", help="Install sunlight simulator to run at Windows startup")
-    p.add_argument("--lat", type=float, default=34.13, help="Latitude")
-    p.add_argument("--lon", type=float, default=-84.34, help="Longitude")
-    p.add_argument("--facing", default="southwest",
+    p.add_argument("--lat", type=float, default=sunlight.DEFAULT_LAT, help="Latitude")
+    p.add_argument("--lon", type=float, default=sunlight.DEFAULT_LON, help="Longitude")
+    p.add_argument("--facing", default=sunlight.DEFAULT_FACING,
                     choices=["north", "northeast", "east", "southeast",
                              "south", "southwest", "west", "northwest"],
                     help="Window orientation")
-    p.add_argument("--peak", type=int, default=75, help="Peak brightness %%")
+    p.add_argument("--peak", type=int, default=sunlight.DEFAULT_PEAK, help="Peak brightness %%")
     p.add_argument("--night-glow", action="store_true", help="Keep dim warm glow at night")
     p.add_argument("--no-weather", action="store_true", help="Disable weather integration")
 
@@ -520,3 +518,7 @@ def main():
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
