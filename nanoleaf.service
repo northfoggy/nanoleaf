@@ -6,8 +6,12 @@ Wants=network-online.target
 [Service]
 Type=notify
 User=nanoleaf
-WorkingDirectory=/home/nanoleaf/nanoleaf
-ExecStart=/home/nanoleaf/nanoleaf/venv/bin/nanoleaf-ctl web --port 5000
+Group=nanoleaf
+WorkingDirectory=/opt/nanoleaf
+ExecStart=/opt/nanoleaf/venv/bin/nanoleaf-ctl web --port 5000
+Environment=HOME=/var/lib/nanoleaf
+StateDirectory=nanoleaf
+StateDirectoryMode=0700
 Restart=always
 RestartSec=5
 WatchdogSec=120
@@ -15,8 +19,7 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/nanoleaf/.nanoleaf-ctl /home/nanoleaf/.config/nanoleaf-ctl
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

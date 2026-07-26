@@ -4,8 +4,8 @@
 
 The reference production target is a Raspberry Pi Zero 2 W running Linux and
 systemd. The portable example uses the dedicated service account `nanoleaf`,
-the host name `nanoserver`, and the repository path
-`/home/nanoleaf/nanoleaf`.
+the host name `nanoserver`, the repository path `/opt/nanoleaf`, and private
+runtime state under `/var/lib/nanoleaf`.
 
 The Python package itself also runs on Windows and other Linux hosts. The
 included systemd unit is path-specific and must be edited for other accounts.
@@ -25,9 +25,33 @@ An editable install is used on the Pi, so pulling Python source updates changes
 the installed application without reinstalling the package. Re-run the pip
 install when dependencies or project metadata change.
 
+## Provision the production account
+
+The bundled systemd unit expects a dedicated account and an application-owned
+checkout. Create both before pairing or installing the service:
+
+```bash
+sudo useradd --system --create-home \
+  --home-dir /var/lib/nanoleaf \
+  --shell /usr/sbin/nologin \
+  nanoleaf
+sudo install -d -o nanoleaf -g nanoleaf -m 755 /opt/nanoleaf
+sudo -u nanoleaf git clone https://github.com/OWNER/nanoleaf.git /opt/nanoleaf
+sudo -u nanoleaf python3 -m venv /opt/nanoleaf/venv
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python -m pip install --upgrade pip
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python -m pip install -e "/opt/nanoleaf[dev]"
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python -m pytest -q /opt/nanoleaf/tests
+```
+
+If the account already exists, `useradd` reports that fact; verify its home is
+`/var/lib/nanoleaf` before continuing. Do not grant this account sudo access.
+
 ## Discover and pair
 
-The Nanoleaf and server must be on the same LAN.
+The Nanoleaf and server must be on the same LAN. For an interactive development
+checkout, use the commands below directly. For the production service account,
+prefix them with `sudo -u nanoleaf env HOME=/var/lib/nanoleaf` and use the
+executables under `/opt/nanoleaf/venv/bin`.
 
 ```bash
 venv/bin/nanoleaf-ctl discover
@@ -55,6 +79,15 @@ stat -c '%a %U %G %n' "$HOME/.config/nanoleaf-ctl/config.json"
 
 Expected mode: `600`.
 
+For example, production pairing and verification are:
+
+```bash
+sudo -u nanoleaf env HOME=/var/lib/nanoleaf \
+  /opt/nanoleaf/venv/bin/nanoleaf-ctl pair <device-ip>
+sudo stat -c '%a %U %G %n' \
+  /var/lib/nanoleaf/.config/nanoleaf-ctl/config.json
+```
+
 ## Test interactively
 
 ```bash
@@ -72,7 +105,8 @@ port.
 Review the deployment-specific paths first:
 
 ```bash
-grep -E '^(User|WorkingDirectory|ExecStart|ReadWritePaths)=' nanoleaf.service
+grep -E '^(User|Group|WorkingDirectory|ExecStart|Environment|StateDirectory)=' \
+  nanoleaf.service
 ```
 
 Validate and install the unit:
@@ -110,13 +144,12 @@ Use a fast-forward-only pull so an unexpected local divergence cannot be
 silently merged into production:
 
 ```bash
-cd /home/nanoleaf/nanoleaf
 sudo systemctl stop nanoleaf.service
-git status -sb
-git fetch origin --prune
-git pull --ff-only
-venv/bin/python -m pip install -e ".[dev]"
-venv/bin/python -m pytest -q
+sudo -u nanoleaf git -C /opt/nanoleaf status -sb
+sudo -u nanoleaf git -C /opt/nanoleaf fetch origin --prune
+sudo -u nanoleaf git -C /opt/nanoleaf pull --ff-only
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python -m pip install -e "/opt/nanoleaf[dev]"
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python -m pytest -q /opt/nanoleaf/tests
 sudo systemctl start nanoleaf.service
 curl --fail --silent http://127.0.0.1:5000/api/health
 ```
@@ -129,7 +162,7 @@ starting the service.
 Record the currently deployed commit before an upgrade:
 
 ```bash
-git rev-parse --short HEAD
+sudo -u nanoleaf git -C /opt/nanoleaf rev-parse --short HEAD
 ```
 
 To inspect an older known-good commit without rewriting branch history, create
@@ -137,8 +170,8 @@ a temporary recovery branch:
 
 ```bash
 sudo systemctl stop nanoleaf.service
-git switch -c recovery/<date> <known-good-commit>
-venv/bin/python -m pytest -q
+sudo -u nanoleaf git -C /opt/nanoleaf switch -c recovery/<date> <known-good-commit>
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python -m pytest -q /opt/nanoleaf/tests
 sudo systemctl start nanoleaf.service
 ```
 

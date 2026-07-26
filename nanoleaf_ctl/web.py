@@ -260,7 +260,7 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
                 _manual_override_until = None
                 last_state_key = None
                 _log("Manual override expired; resuming automation")
-            manual_override = _control_mode == "manual_override" and not demo
+            manual_override = _control_mode == "manual_override"
 
         applied = False
         try:
@@ -290,6 +290,13 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
                 _last_device_error = _redact(e)
                 last_state_key = None
                 last_applied_brightness = None
+
+        if demo and manual_override:
+            # Pause the demo clock as well as device writes. Otherwise a demo
+            # would race through the simulated day while manual control is
+            # active and finish before the user resumes it.
+            time.sleep(5)
+            continue
 
         if demo:
             demo_time += timedelta(minutes=15)

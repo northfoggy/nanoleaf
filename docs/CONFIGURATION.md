@@ -110,6 +110,7 @@ During an override:
 
 - the simulator continues to calculate desired daylight;
 - it does not send automatic updates to the Nanoleaf;
+- a time-lapse demo pauses its simulated clock until automation resumes;
 - the dashboard shows the override expiration time;
 - Resume ends the override and forces automation to reconcile;
 - Stop ends both automation and the override.
@@ -128,3 +129,5 @@ detection for those controllers.
 
 The active log rotates at 1 MB. Startup redaction retains at most 1 MB from a
 pre-existing active log, preventing unbounded memory use on small hardware.
+The bundled systemd service sets `HOME=/var/lib/nanoleaf`, so these `~` paths
+resolve beneath `/var/lib/nanoleaf` in the reference production deployment.

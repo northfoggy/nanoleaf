@@ -175,6 +175,9 @@ def parse_color(color_str: str) -> tuple[int, int, int]:
 def set_color_from_string(nl: Nanoleaf, color_str: str) -> None:
     """Parse a color string and apply it via direct API (no brightness flash)."""
     r, g, b = parse_color(color_str)
+    if (r, g, b) == (0, 0, 0):
+        _put(nl, "/state", {"on": {"value": False}})
+        return
     h, s, _v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
     response = requests.put(
         nl.url + "/state",
