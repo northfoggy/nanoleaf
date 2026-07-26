@@ -35,7 +35,7 @@ device.
 Create a virtual environment and install the project:
 
 ```bash
-git clone https://github.com/northfoggy/nanoleaf.git
+git clone https://github.com/OWNER/nanoleaf.git
 cd nanoleaf
 python3 -m venv venv
 venv/bin/python -m pip install --upgrade pip
@@ -83,14 +83,15 @@ command.
 
 ## Raspberry Pi service
 
-The included `nanoleaf.service` is configured for the current deployment:
+The included `nanoleaf.service` uses a generic dedicated service account:
 
-- user: `northfoggy`
-- checkout: `/home/northfoggy/nanoleaf`
-- virtual environment: `/home/northfoggy/nanoleaf/venv`
+- user: `nanoleaf`
+- checkout: `/home/nanoleaf/nanoleaf`
+- virtual environment: `/home/nanoleaf/nanoleaf/venv`
 - dashboard: port `5000`
 
-If those paths differ on another machine, edit the unit before installing it.
+Replace `OWNER` in the clone URL with the repository owner. If the deployment
+account or paths differ, edit the unit before installing it.
 See [Installation and deployment](docs/INSTALLATION.md) for the complete,
 verified procedure.
 

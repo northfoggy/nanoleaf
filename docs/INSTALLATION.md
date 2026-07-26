@@ -2,9 +2,10 @@
 
 ## Supported deployment
 
-The verified production deployment is a Raspberry Pi Zero 2 W running Linux
-and systemd. The service account is `northfoggy`, the host is `nanoserver`, and
-the repository is `/home/northfoggy/nanoleaf`.
+The reference production target is a Raspberry Pi Zero 2 W running Linux and
+systemd. The portable example uses the dedicated service account `nanoleaf`,
+the host name `nanoserver`, and the repository path
+`/home/nanoleaf/nanoleaf`.
 
 The Python package itself also runs on Windows and other Linux hosts. The
 included systemd unit is path-specific and must be edited for other accounts.
@@ -12,7 +13,7 @@ included systemd unit is path-specific and must be edited for other accounts.
 ## Clone and install
 
 ```bash
-git clone https://github.com/northfoggy/nanoleaf.git
+git clone https://github.com/OWNER/nanoleaf.git
 cd nanoleaf
 python3 -m venv venv
 venv/bin/python -m pip install --upgrade pip
@@ -109,7 +110,7 @@ Use a fast-forward-only pull so an unexpected local divergence cannot be
 silently merged into production:
 
 ```bash
-cd /home/northfoggy/nanoleaf
+cd /home/nanoleaf/nanoleaf
 sudo systemctl stop nanoleaf.service
 git status -sb
 git fetch origin --prune

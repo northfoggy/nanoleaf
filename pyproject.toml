@@ -32,10 +32,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
 
-[project.urls]
-Homepage = "https://github.com/northfoggy/nanoleaf"
-Issues = "https://github.com/northfoggy/nanoleaf/issues"
-
 [project.scripts]
 nanoleaf-ctl = "nanoleaf_ctl.cli:main"
 
