@@ -1,9 +1,9 @@
 # NanoLeaf Sunlight Simulator
 
-**NanoLeaf Sunlight Simulator by Quicksilver Industries LTD.** is a local-first
-controller for Nanoleaf lighting. It combines direct device controls with a
-weather-aware automation engine that makes indoor panels follow the daylight
-that would arrive through a real window.
+**NanoLeaf Sunlight Simulator by Quicksilver Industries LTD.** is an
+experimental, local-first controller for Nanoleaf lighting. It combines direct
+device controls with a weather-aware automation engine that makes indoor panels
+follow the daylight that would arrive through a real window.
 
 The application can run from the command line or as a browser dashboard. Its
 primary deployment target is a Raspberry Pi on the same LAN as the Nanoleaf
