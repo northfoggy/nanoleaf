@@ -1,151 +1,204 @@
-# nanoleaf-ctl Architecture
+# Architecture
 
-## Overview
+## Purpose
 
-**nanoleaf-ctl** is a command-line and web-based controller for Nanoleaf light panels featuring a weather-aware sunlight simulator that mimics natural window light throughout the day. It runs on a Raspberry Pi (or any Linux server) on the same network as the Nanoleaf device.
+NanoLeaf Sunlight Simulator is a local home-automation service. It makes a
+Nanoleaf installation behave like daylight entering through a configured
+window while retaining direct manual controls.
 
-## How It Works
+The system favors predictable local operation:
 
-The core idea: instead of simulating the sun directly, the simulator computes what light looks like coming *through a window* — with real colors (blue hour is blue, golden hour is orange), diffused brightness, and window-orientation awareness. It uses real solar position data for your latitude/longitude, modulated by live weather conditions.
+- Device control stays on the LAN.
+- Weather is the only normal external data dependency.
+- Automation continues using solar calculations if weather is unavailable.
+- Device and network failures do not terminate the web service.
+- A person can override automation without permanently disabling it.
 
-```
- Solar Position (astral)    Weather (Open-Meteo)
-        |                          |
-        v                          v
- compute_window_light()  -->  apply_weather()
-        |
-        v
-   apply_light()  -->  Nanoleaf API  -->  Physical Panels
-```
+## System context
 
-Every 60 seconds, the loop:
-1. Computes solar elevation and azimuth for the current time and location
-2. Maps elevation to a phase (night, twilight, blue hour, golden hour, day, midday)
-3. Calculates brightness and color based on phase + window facing direction
-4. Fetches weather (cached, refreshes every 10 min) and modulates accordingly
-5. Sends the result to the Nanoleaf device
-
-## Project Structure
-
-```
-nanoleaf_ctl/
-  __init__.py         # Package init
-  cli.py              # CLI entry point, 17 subcommands
-  client.py           # Nanoleaf API wrapper (discovery, pairing, control)
-  config.py           # Persistent config (~/.config/nanoleaf-ctl/) + file locking
-  sunlight.py         # Core algorithm: solar phases, weather modulation, main loop
-  weather.py          # Open-Meteo integration with 10-min cache
-  web.py              # Flask web dashboard (single-page app, embedded HTML/JS)
+```mermaid
+flowchart LR
+    User["Browser or CLI user"] --> App["nanoleaf-ctl"]
+    App --> Solar["Astral solar calculations"]
+    App --> Weather["Open-Meteo weather API"]
+    App --> Device["Nanoleaf local HTTP API"]
+    Systemd["systemd"] --> App
+    App --> Config["Owner-only config and lock files"]
+    App --> Log["Bounded rotating simulator log"]
 ```
 
-## Module Details
+The Nanoleaf device API is reached over local HTTP on port 16021. Open-Meteo
+is reached over HTTPS. The dashboard listens on port 5000 by default.
 
-### sunlight.py — The Engine
+## Source layout
 
-The main algorithm in `compute_window_light()` maps solar elevation to light phases:
+| Module | Responsibility |
+|---|---|
+| `nanoleaf_ctl/cli.py` | Argument parsing and command implementations |
+| `nanoleaf_ctl/client.py` | Discovery, pairing, saved-token connection, and direct device operations |
+| `nanoleaf_ctl/config.py` | Atomic credential persistence and exclusive simulator lock |
+| `nanoleaf_ctl/sunlight.py` | Solar model, window orientation, weather modulation, and device application |
+| `nanoleaf_ctl/weather.py` | Open-Meteo lookup and ten-minute weather cache |
+| `nanoleaf_ctl/web.py` | Flask API, embedded dashboard, automation lifecycle, manual override, health, and logs |
+| `nanoleaf.service` | Hardened systemd service for the Raspberry Pi deployment |
 
-| Elevation | Phase | Mode | Description |
-|-----------|-------|------|-------------|
-| < -18 | night | off / dim glow | Full dark |
-| -18 to -6 | twilight | RGB (5,5,15)→(30,50,120) | Deep blue, very dim |
-| -6 to 0 | blue hour | RGB blue-purple | Rich blue through window |
-| 0 to 6 | golden hour | RGB (255,130,50)↔(255,200,130) | Warm orange/amber |
-| 6 to 15 | morning/afternoon | color_temp 2700-4000K | Transitional warm white |
-| 15 to 40 | day | color_temp 4000-5500K | Neutral daylight |
-| > 40 | midday | color_temp 5500K | Bright cool white |
+## Startup sequence
 
-**Window facing** adjusts brightness based on sun-to-window angle:
-- Direct (0-45 difference): full brightness
-- Angled (45-90): moderate
-- Oblique (90-135): weak indirect
-- Behind (>135): ambient only (10%)
+The systemd unit uses `Type=notify` and a 120-second watchdog.
 
-**Weather modulation** (`apply_weather()`):
-- Cloud cover dims brightness: clear (0%) → overcast (-40%) → rain (-55%) → storm (-65%)
-- Overcast desaturates RGB colors toward grey
-- Cloudy days shift color temperature cooler (up to +500K)
+1. `nanoleaf-ctl web` binds the HTTP socket.
+2. The process starts the independent systemd watchdog thread.
+3. The process sends `READY=1` to systemd.
+4. Device connection and simulator auto-start run in a background worker.
+5. The Flask server accepts dashboard and API requests.
+6. If the device is temporarily unavailable, the web service remains healthy.
 
-### weather.py — Live Weather
+Device connection must not block systemd readiness. This separation is
+important on small Raspberry Pi hardware and when a Nanoleaf is powered off.
 
-Uses the free Open-Meteo API (no API key needed). The `WeatherCache` class fetches cloud cover and weather condition every 10 minutes, falling back to cached data if the API is unreachable. WMO weather codes are mapped to human-readable conditions (clear, overcast, rain, fog, etc.).
+## Automation pipeline
 
-### web.py — Dashboard
+Every normal automation cycle performs the following work:
 
-A single-page Flask app with embedded HTML/CSS/JS. Dark-themed, mobile-responsive. Provides:
-- Device info, power toggle, brightness/color-temp sliders
-- Color presets and custom color picker
-- Effects browser
-- Sunlight simulator controls (start/stop, location, facing, peak brightness, bias)
-- Real-time light preview, phase display, weather status
-- Live log viewer
-- 24-hour timeline preview
+1. Calculate solar elevation and azimuth for the configured coordinates.
+2. Select a phase and base light color from solar elevation.
+3. Scale brightness using the angle between the sun and window orientation.
+4. Retrieve cached weather and apply cloud/condition adjustments.
+5. Compare the desired state with the last applied state.
+6. If needed, send a bounded-time HTTP request to the Nanoleaf.
+7. Sleep until the next 60-second cycle.
 
-The simulator runs as a background thread with generation-based lifecycle management. Thread safety is ensured via `threading.Lock` for the start endpoint, preventing duplicate loops from concurrent requests.
-
-### config.py — Persistence and Locking
-
-Configuration (device IP, auth token) is stored in `~/.config/nanoleaf-ctl/config.json` using atomic, owner-only writes. An OS-level exclusive lock (`fcntl.flock` on Linux, `msvcrt.locking` on Windows) at `~/.config/nanoleaf-ctl/sunlight.lock` prevents multiple simulator instances on the same machine. The lock file records `hostname:pid` for diagnostics.
-
-### client.py — Device Communication
-
-Thin wrapper around the `nanoleafapi` library. Handles discovery (SSDP), pairing, connection with saved credentials, and color parsing (hex, RGB, named colors).
-
-### cli.py — Command Interface
-
-17 subcommands:
-
-| Command | Purpose |
-|---------|---------|
-| `discover` | Find devices on the network |
-| `pair <ip>` | Authenticate with a device |
-| `setup <ip> <token>` | Save config from prior pairing |
-| `info` | Show device details |
-| `on` / `off` / `toggle` | Power control |
-| `brightness <0-100>` | Set brightness |
-| `color <color>` | Set color (hex, RGB, or name) |
-| `color-temp <1200-6500>` | Set color temperature |
-| `effects` / `effect <name>` | List/activate effects |
-| `sunlight` | Run the simulator (with `--preview` for dry run) |
-| `web` | Start the web dashboard |
-| `install` / `uninstall` | Windows auto-start (Task Scheduler) |
-| `identify` | Flash panels |
-| `forget` | Clear saved config |
-
-## Deployment
-
-On the Raspberry Pi (nanoserver):
-
-- **Installed as**: editable pip package (`pip install -e .`) in a venv at `/home/northfoggy/nanoleaf/venv/`
-- **Auto-start**: systemd service `nanoleaf.service` runs `nanoleaf-ctl web --port 5000` at boot
-- **Simulator start**: via the web UI (click Start), which spawns a background thread
-
-```
-[systemd] → nanoleaf-ctl web --port 5000
-                 ↓
-           Flask app (port 5000)
-                 ↓ (on Start click)
-           _run_sim_loop() thread
-                 ↓ (every 60s)
-           compute → weather → apply → Nanoleaf
+```mermaid
+flowchart TD
+    Time["Current UTC time"] --> Position["Solar elevation and azimuth"]
+    Location["Latitude, longitude, timezone"] --> Position
+    Position --> Phase["Night, twilight, blue hour, golden hour, day, midday"]
+    Facing["Window orientation"] --> Brightness["Facing factor and brightness"]
+    Phase --> Brightness
+    Weather["Cached weather"] --> Modulation["Cloud and condition modulation"]
+    Brightness --> Modulation
+    Modulation --> Desired["Desired mode, color or Kelvin, brightness"]
+    Desired --> Apply["Nanoleaf state update with timeout"]
 ```
 
-## Conflict Prevention
+### Solar phases
 
-Multiple safeguards prevent duplicate controllers from fighting:
+| Solar elevation | Typical phase | Output |
+|---|---|---|
+| Below -18 degrees | Night | Off, or optional dim warm glow |
+| -18 to -6 degrees | Twilight | Very dim deep blue |
+| -6 to 0 degrees | Blue hour | Blue-purple RGB light |
+| 0 to 6 degrees | Golden hour | Warm orange/salmon RGB light |
+| 6 to 15 degrees | Low daylight | Warm white trending toward neutral |
+| 15 to 40 degrees | Day | Neutral white trending toward 5500 K |
+| Above 40 degrees | Midday | Cool neutral white at configured peak |
 
-1. **Thread-level**: `threading.Lock` around the start endpoint prevents race conditions from concurrent HTTP requests
-2. **Process-level**: an OS-level exclusive file lock prevents CLI and web instances from running simultaneously on the same machine
-3. **Conflict detection**: Each cycle reads back the device brightness — if it differs from what was last set, a `CONFLICT` warning is logged
-4. **Hostname logging**: Lock file and startup logs include `hostname:pid` for cross-machine diagnostics
+### Window orientation
 
-The systemd watchdog is fed by a dedicated process-liveness thread, independent of simulator state. Stopping the simulator from the dashboard therefore leaves the web service healthy and stopped rather than triggering a watchdog restart.
+The facing factor is based on the absolute angle between solar azimuth and the
+window's configured compass direction:
 
-## Dependencies
+- within 45 degrees: full direct-light factor;
+- 45-90 degrees: linearly reduced direct light;
+- 90-135 degrees: weak indirect light;
+- beyond 135 degrees: ten-percent ambient factor.
 
-| Package | Purpose |
-|---------|---------|
-| nanoleafapi >= 2.1.2 | Device API and SSDP discovery |
-| astral >= 3.2 | Solar position calculations |
-| requests >= 2.28 | HTTP client for weather API |
-| flask >= 3.0 | Web dashboard |
-| Python >= 3.9 | Runtime |
+### Weather
+
+`WeatherCache` refreshes Open-Meteo data every ten minutes. Cloud cover reduces
+brightness. Overcast and precipitation reduce it further, desaturate RGB
+colors, and can shift white light cooler. If the fetch fails, cached weather is
+used when available; otherwise the solar result remains usable.
+
+## Runtime state model
+
+The web process maintains these important states under `_sim_lock`:
+
+- simulator running/stopped;
+- normal/demo mode;
+- current computed state and configuration;
+- device online/offline and last-seen time;
+- automation/manual-override/stopped control mode;
+- generation number for superseding old threads;
+- process-level lock handle.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Starting
+    Starting --> Automation: device connected and lock acquired
+    Starting --> WebOnly: device unavailable
+    WebOnly --> Automation: later start succeeds
+    Automation --> ManualOverride: direct dashboard change
+    ManualOverride --> Automation: one hour expires or Resume is selected
+    Automation --> DeviceOffline: device request fails
+    DeviceOffline --> Automation: reconnect and state reapply
+    Automation --> Stopped: Stop selected
+    ManualOverride --> Stopped: Stop selected
+    Stopped --> Automation: Start selected
+```
+
+Direct dashboard changes to power, brightness, color, color temperature, or an
+effect start a one-hour manual override. The automation thread keeps computing
+state but does not overwrite the person's choice. Resume ends the override and
+forces reconciliation on the next cycle.
+
+## Concurrency and duplicate prevention
+
+Several mechanisms address different duplicate-controller risks:
+
+1. `_sim_lock` serializes state changes inside the web process.
+2. A generation counter causes superseded simulator threads to exit.
+3. `sunlight.lock` uses an OS-level exclusive file lock to prevent another
+   local process from running the simulator.
+4. The lock records `hostname:pid` for diagnostics.
+5. Device-brightness readback detects likely control by another machine.
+6. systemd is the sole documented production launch path on the Pi.
+
+The file lock only protects one host. It cannot prevent a controller on a
+different computer from controlling the same Nanoleaf.
+
+## Reliability mechanisms
+
+- All application-owned Nanoleaf requests have a ten-second timeout.
+- Failed device calls mark the device offline instead of terminating the loop.
+- Reconnection clears the previous state key and reapplies the current target.
+- Configuration writes are atomic and owner-only.
+- systemd restarts unexpected process exits after five seconds.
+- A dedicated thread feeds the systemd watchdog independently of automation.
+- Logging setup is serialized so two startup threads cannot add duplicate
+  handlers.
+- The simulator log rotates at 1 MB with three backups.
+- Existing logs are scrubbed and bounded without loading the full file into
+  memory, which is critical on a Raspberry Pi Zero 2 W.
+- The in-memory diagnostic log retains only the latest 200 lines.
+
+## Persistence
+
+| Path | Contents | Expected permissions |
+|---|---|---|
+| `~/.config/nanoleaf-ctl/config.json` | Device IP and authentication token | `600` |
+| `~/.config/nanoleaf-ctl/sunlight.lock` | Active simulator holder metadata | Owned by service user |
+| `~/.nanoleaf-ctl/sunlight.log` | Current persistent simulator log | `600` |
+| `~/.nanoleaf-ctl/sunlight.log.1` etc. | Rotated logs | Owner-only via service umask |
+
+## Security boundary
+
+The dashboard has no login or request authentication. Anyone who can reach port
+5000 can control the lights and read device metadata exposed by the API. The
+service is therefore appropriate for a trusted LAN, not direct internet
+exposure. See [Security](docs/SECURITY.md) for the full model.
+
+The systemd unit reduces host impact with `NoNewPrivileges`, `PrivateTmp`, a
+read-only home view, a strict read-only system view, and explicit writable paths
+for application state.
+
+## Known constraints
+
+- The embedded Flask/Werkzeug server is intended for a trusted home LAN, not a
+  public production web workload.
+- Default location and deployment paths are intentionally specific to the
+  current owner; other installations must override them.
+- Weather is current-condition modulation, not room-level closed-loop sensing.
+- Conflict detection observes brightness only and cannot identify a remote
+  controller by name.
+- The device token is stored locally because the Nanoleaf API requires it.

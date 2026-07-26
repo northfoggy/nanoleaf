@@ -1,142 +1,125 @@
-# nanoleaf-ctl
+# NanoLeaf Sunlight Simulator
 
-A command-line and web-based tool for controlling Nanoleaf light panels over your local network. Its headline feature is a **window light simulator** that drives your ceiling-mounted Nanoleaf Skylights through a full day of realistic sunlight — golden hour warmth at dawn, cool white at midday, deep blue at dusk — adjusted in real time for your location, window orientation, and local weather.
+**NanoLeaf Sunlight Simulator by Quicksilver Industries LTD.** is a local-first
+controller for Nanoleaf lighting. It combines direct device controls with a
+weather-aware automation engine that makes indoor panels follow the daylight
+that would arrive through a real window.
 
-## Features
+The application can run from the command line or as a browser dashboard. Its
+primary deployment target is a Raspberry Pi on the same LAN as the Nanoleaf
+device.
 
-- **Device control** — power, brightness, color, color temperature, and effects from the terminal or a phone-friendly web dashboard
-- **Window light simulator** — uses real solar position math (`astral`) to reproduce the color and intensity of light coming through a window throughout the day
-- **Weather-aware** — cloud cover and conditions from the free Open-Meteo API dim and cool the light just like an overcast sky would
-- **Window orientation** — specify which direction your window faces (N/NE/E/SE/S/SW/W/NW) and the simulator adjusts for how directly the sun hits it
-- **Network discovery** — auto-detects Nanoleaf devices via SSDP
-- **Web dashboard** — responsive single-page UI with sliders, color picker, effect selector, and full simulator controls accessible from any device on your network
-- **Resilient** — gracefully handles the device being power-cycled and re-applies the correct state when it comes back
+## What it does
+
+- Controls power, brightness, color, color temperature, and saved effects.
+- Computes the sun's elevation and azimuth for a configured location.
+- Adjusts brightness for the window's compass orientation.
+- Uses blue-hour, golden-hour, daylight, and nighttime lighting profiles.
+- Modulates the result using current cloud cover and weather from Open-Meteo.
+- Applies smooth, one-minute transitions to the Nanoleaf device.
+- Automatically resumes the correct state after a device disconnect.
+- Pauses automation for one hour when a person makes a direct dashboard change.
+- Prevents two simulator processes on the same host from controlling the lights.
+- Exposes a responsive LAN dashboard with a live house, location, orientation,
+  weather, and simulated-light visualization.
 
 ## Requirements
 
-- Python 3.10+
-- A Nanoleaf device (Skylights, Light Panels, Shapes, Essentials) on the same local network
-- Internet connection (optional, only for weather integration)
-
-## Installation
-
-```bash
-pip install .
-```
-
-Or for development:
-
-```bash
-pip install -e ".[dev]"
-python -m pytest
-```
+- Python 3.10 or newer
+- A Nanoleaf device on the same local network
+- Internet access for live weather (optional)
+- Linux with systemd for the documented Raspberry Pi service deployment
 
 ## Quick start
 
-### 1. Find your device
+Create a virtual environment and install the project:
 
 ```bash
-nanoleaf-ctl discover
+git clone https://github.com/northfoggy/nanoleaf.git
+cd nanoleaf
+python3 -m venv venv
+venv/bin/python -m pip install --upgrade pip
+venv/bin/python -m pip install -e ".[dev]"
 ```
 
-### 2. Pair
-
-Hold the power button on your Nanoleaf for 5–7 seconds until the LEDs start flashing, then:
+Find and pair with the Nanoleaf:
 
 ```bash
-nanoleaf-ctl pair <ip>
+venv/bin/nanoleaf-ctl discover
+venv/bin/nanoleaf-ctl pair <device-ip>
 ```
 
-The auth token is saved to `~/.config/nanoleaf-ctl/config.json` — you only need to pair once.
+Hold the Nanoleaf power button for 5-7 seconds before running `pair`. Pairing
+stores the device IP and token in
+`~/.config/nanoleaf-ctl/config.json` with owner-only permissions.
 
-### 3. Control
+Start the dashboard:
 
 ```bash
+venv/bin/nanoleaf-ctl web --port 5000
+```
+
+Then open `http://<server-name-or-ip>:5000/` from another device on the LAN.
+The web process automatically starts the sunlight automation using the defaults
+in `nanoleaf_ctl/sunlight.py`.
+
+## Common commands
+
+```bash
+nanoleaf-ctl info
 nanoleaf-ctl on
+nanoleaf-ctl off
 nanoleaf-ctl brightness 60
-nanoleaf-ctl color orange
+nanoleaf-ctl color "#ffd29b"
 nanoleaf-ctl color-temp 4000
-nanoleaf-ctl effects            # list available effects
+nanoleaf-ctl effects
 nanoleaf-ctl effect "Northern Lights"
+nanoleaf-ctl sunlight --preview
+nanoleaf-ctl sunlight --lat 34.13 --lon -84.34 --facing southwest
 ```
 
-### 4. Start the sunlight simulator
+Run `nanoleaf-ctl <command> --help` for the complete arguments accepted by a
+command.
+
+## Raspberry Pi service
+
+The included `nanoleaf.service` is configured for the current deployment:
+
+- user: `northfoggy`
+- checkout: `/home/northfoggy/nanoleaf`
+- virtual environment: `/home/northfoggy/nanoleaf/venv`
+- dashboard: port `5000`
+
+If those paths differ on another machine, edit the unit before installing it.
+See [Installation and deployment](docs/INSTALLATION.md) for the complete,
+verified procedure.
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [Architecture](ARCHITECTURE.md) | Components, data flow, state, concurrency, and reliability model |
+| [Installation and deployment](docs/INSTALLATION.md) | Development install, pairing, Raspberry Pi, systemd, upgrades, and rollback |
+| [Configuration](docs/CONFIGURATION.md) | Device credentials, sunlight parameters, defaults, and runtime behavior |
+| [Operations](docs/OPERATIONS.md) | Daily operation, health checks, logs, updates, and recovery |
+| [HTTP API](docs/API.md) | Dashboard API endpoints, payloads, responses, and trust boundary |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Diagnostic procedures for service, device, network, weather, and memory issues |
+| [Security](docs/SECURITY.md) | Token handling, permissions, LAN exposure, service hardening, and SSH access |
+| [Development](docs/DEVELOPMENT.md) | Test workflow, code map, change checklist, and release verification |
+
+## Important security note
+
+The dashboard and HTTP API do not authenticate users. They are intended only
+for a trusted home LAN. Do not expose port 5000 directly to the public internet.
+The Nanoleaf token is equivalent to a device password; never paste the config
+file or an unredacted device URL into an issue or chat.
+
+## Tests
 
 ```bash
-nanoleaf-ctl sunlight --lat 40.7 --lon -74.0 --facing south
-```
-
-Preview the full day schedule without sending anything to the device:
-
-```bash
-nanoleaf-ctl sunlight --preview --lat 40.7 --lon -74.0 --facing south
-```
-
-### 5. Launch the web dashboard
-
-```bash
-nanoleaf-ctl web
-```
-
-Open `http://<your-ip>:5000` on your phone or laptop.
-
-## Sunlight simulator
-
-The simulator maps solar elevation to distinct lighting phases:
-
-| Solar elevation | Phase | Light |
-|---|---|---|
-| Below -18° | Night | Off (or dim warm glow with `--night-glow`) |
-| -18° to -6° | Twilight | Dark blue, very dim |
-| -6° to 0° | Blue hour | Deep blue-purple |
-| 0° to 6° | Golden hour | Warm orange/salmon |
-| 6° to 40° | Day | Color temperature ramps from 2700 K to 5500 K |
-| Above 40° | Midday | Cool neutral white at peak brightness |
-
-Transitions fade over 60 seconds to avoid abrupt changes.
-
-### Simulator options
-
-```
---lat, --lon       Your coordinates (default: Atlanta, GA)
---tz               Timezone (default: America/New_York)
---facing           Window direction: n, ne, e, se, s, sw, w, nw (default: sw)
---peak             Max brightness percentage (default: 75)
---night-glow       Keep a dim warm light at night instead of turning off
---no-weather       Disable weather-based adjustments
---interval         Update frequency in seconds (default: 60)
-```
-
-## Web dashboard
-
-The dashboard provides:
-
-- Power toggle, brightness and color temperature sliders
-- Color presets, a color picker, and hex/RGB text input
-- Effect browser
-- Full simulator controls: start/stop, configure location and orientation, live status with current phase and weather, and a 24-hour preview timeline
-
-It runs on Flask and is designed to work from a Raspberry Pi on your home network.
-
-## CLI reference
-
-```
-nanoleaf-ctl discover            Find devices on the network
-nanoleaf-ctl pair <ip>           Pair with a device
-nanoleaf-ctl setup <ip> <token>  Save an existing auth token
-nanoleaf-ctl info                Show device details
-nanoleaf-ctl on / off / toggle   Power control
-nanoleaf-ctl brightness <0-100>  Set brightness
-nanoleaf-ctl color <color>       Set color (hex, RGB, or name)
-nanoleaf-ctl color-temp <K>      Set color temperature (1200–6500 K)
-nanoleaf-ctl effects             List effects
-nanoleaf-ctl effect <name>       Activate an effect
-nanoleaf-ctl identify            Flash panels for identification
-nanoleaf-ctl sunlight [options]  Run the window light simulator
-nanoleaf-ctl web [--port PORT]   Start the web dashboard
-nanoleaf-ctl forget              Clear saved configuration
+venv/bin/python -m pytest -q
 ```
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
