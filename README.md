@@ -106,6 +106,7 @@ verified procedure.
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Diagnostic procedures for service, device, network, weather, and memory issues |
 | [Security](docs/SECURITY.md) | Token handling, permissions, LAN exposure, service hardening, and SSH access |
 | [Development](docs/DEVELOPMENT.md) | Test workflow, code map, change checklist, and release verification |
+| [Brand policy](TRADEMARKS.md) | Permitted references to Quicksilver Industries and restrictions on branding forks |
 
 ## Important security note
 
@@ -119,6 +120,14 @@ file or an unredacted device URL into an issue or chat.
 ```bash
 venv/bin/python -m pytest -q
 ```
+
+## Brand policy
+
+The MIT License covers the software, but it does not grant permission to brand
+forks, modified versions, products, or services as **Quicksilver Industries**
+or **Quicksilver Industries LTD.**, or to imply endorsement or affiliation.
+Factual references to the project's origin are permitted. See
+[Brand and trademark policy](TRADEMARKS.md).
 
 ## License
 
