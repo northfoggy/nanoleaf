@@ -52,15 +52,16 @@ views. Published screenshots use sanitized example values.
 
 ## Quick start
 
-Create a virtual environment and install the project:
+Create a virtual environment and install the published package:
 
 ```bash
-git clone https://github.com/OWNER/nanoleaf.git
-cd nanoleaf
 python3 -m venv venv
 venv/bin/python -m pip install --upgrade pip
-venv/bin/python -m pip install -e ".[dev]"
+venv/bin/python -m pip install nanoleaf-ctl
 ```
+
+For development from a source checkout, replace the final command with
+`venv/bin/python -m pip install -e ".[dev]"` from the repository root.
 
 Find and pair with the Nanoleaf:
 
@@ -132,6 +133,8 @@ verified procedure.
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Diagnostic procedures for service, device, network, weather, and memory issues |
 | [Security](docs/SECURITY.md) | Token handling, permissions, LAN exposure, service hardening, and SSH access |
 | [Development](docs/DEVELOPMENT.md) | Test workflow, code map, change checklist, and release verification |
+| [Releasing](docs/RELEASING.md) | Maintainer checklist for building, reviewing, and publishing a release |
+| [Changelog](CHANGELOG.md) | User-visible changes organized by release |
 | [Dashboard gallery](docs/SCREENSHOTS.md) | Sanitized screenshots of the sunlight simulator and device controls |
 | [Brand policy](TRADEMARKS.md) | Permitted references to Quicksilver Industries and restrictions on branding forks |
 | [Device safety](SAFETY.md) | Manufacturer instructions, third-party status, operational risks, and warranty notice |
