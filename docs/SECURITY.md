@@ -93,8 +93,10 @@ The included unit applies:
 - `NoNewPrivileges=true`: the process cannot gain privileges;
 - `PrivateTmp=true`: a private temporary directory;
 - `ProtectSystem=strict`: system paths are read-only;
-- `ProtectHome=read-only`: home directories are read-only by default;
-- `ReadWritePaths=...`: only application config and log directories are writable;
+- `ProtectHome=true`: home directories are inaccessible to the service;
+- `StateDirectory=nanoleaf`: systemd provisions `/var/lib/nanoleaf` as the
+  service's writable state and sets it as `HOME` through the unit;
+- `StateDirectoryMode=0700`: only the service account can access that state;
 - an owner-only umask;
 - an independent process watchdog.
 

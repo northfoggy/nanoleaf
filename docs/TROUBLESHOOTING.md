@@ -180,8 +180,8 @@ Never share `config.json`, SSH private keys, or an unredacted URL containing
 
 ```bash
 echo '=== VERSION ==='
-git -C "$HOME/nanoleaf" log -1 --oneline
-"$HOME/nanoleaf/venv/bin/python" --version
+sudo -u nanoleaf git -C /opt/nanoleaf log -1 --oneline
+sudo -u nanoleaf /opt/nanoleaf/venv/bin/python --version
 
 echo '=== SERVICE ==='
 systemctl show nanoleaf.service \
