@@ -25,3 +25,11 @@ Before controlling a physical device, read the project's
 [device safety and third-party notice](../SAFETY.md) and follow Nanoleaf's
 [official instructions](https://support.nanoleaf.me/hc/en-us) for the exact
 model.
+
+## Repository social preview
+
+![Repository social preview for NanoLeaf Sunlight Simulator](assets/repository-social-preview.png)
+
+This 1280×640 image is the source used for the repository's GitHub social
+preview. It is kept here so that future updates can preserve the same 2:1
+composition and sanitized example values.
