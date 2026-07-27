@@ -132,6 +132,9 @@ document supersedes it.
 
 ## Release checklist
 
+The complete release and Trusted Publishing procedure is in
+[`docs/RELEASING.md`](RELEASING.md).
+
 1. Confirm intended changes only with `git status -sb`.
 2. Run the complete test suite.
 3. Run `git diff --check`.

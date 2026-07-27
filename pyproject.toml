@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=68.0,<75.0", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanoleaf-ctl"
-version = "0.1.0"
+version = "0.2.0"
 description = "Control Nanoleaf lights from the command line or a web dashboard, with a weather-aware sunlight simulator that mimics natural window light throughout the day."
 requires-python = ">=3.10"
-license = {text = "MIT"}
-authors = [{ name = "Jason Mitchell" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Quicksilver Industries LTD." }]
 keywords = ["nanoleaf", "smart-home", "home-automation", "raspberry-pi", "sunlight-simulator", "iot", "lighting"]
 readme = "README.md"
 classifiers = [
@@ -16,10 +17,12 @@ classifiers = [
     "Environment :: Console",
     "Environment :: Web Environment",
     "Intended Audience :: End Users/Desktop",
-"Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
 ]
 dependencies = [
@@ -31,6 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+release = ["build>=1.2,<2", "twine>=6,<7"]
 
 [project.scripts]
 nanoleaf-ctl = "nanoleaf_ctl.cli:main"
