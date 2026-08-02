@@ -2,6 +2,27 @@
 
 This project follows semantic versioning while it remains experimental.
 
+## 0.2.1
+
+This reliability and security release addresses a sustained Raspberry Pi Wi-Fi
+route failure observed in production.
+
+### Added
+
+- A gateway-scoped systemd recovery timer that reconnects Wi-Fi after repeated
+  failures and requests a guarded reboot only after a longer outage.
+- Deployment assets for disabling NetworkManager Wi-Fi power saving and keeping
+  a size- and age-limited persistent system journal across reboots.
+- Operational documentation for post-reboot network incident investigation and
+  recovery verification.
+
+### Security
+
+- Redaction now removes Nanoleaf tokens from relative `/api/v1/<token>/` error
+  paths as well as complete URLs.
+- The active simulator log and all three bounded rotations are scrubbed when
+  file logging starts.
+
 ## 0.2.0
 
 This release turns the original command-line controller into an experimental,

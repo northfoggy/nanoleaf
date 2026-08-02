@@ -148,6 +148,59 @@ curl --fail --silent --show-error \
 Healthy output has `ActiveState=active`, `SubState=running`, a nonzero
 `MainPID`, and JSON with `"status":"ok"`.
 
+## Install network resilience and persistent diagnostics
+
+The optional recovery timer checks the Pi's default gateway, not the Nanoleaf.
+This prevents an unplugged or updating light from causing a server reboot. With
+the supplied defaults, three consecutive two-minute failures cause a
+NetworkManager reconnect. Eight consecutive failures request a reboot, with a
+six-hour persistent cooldown to prevent a reboot loop during a router outage.
+
+Review and install the assets:
+
+```bash
+sudo sh -n deploy/nanoleaf-network-recovery
+sudo install -o root -g root -m 755 \
+  deploy/nanoleaf-network-recovery \
+  /usr/local/sbin/nanoleaf-network-recovery
+sudo install -o root -g root -m 644 \
+  deploy/nanoleaf-network-recovery.service \
+  deploy/nanoleaf-network-recovery.timer \
+  /etc/systemd/system/
+
+sudo install -d -o root -g root -m 755 \
+  /etc/NetworkManager/conf.d \
+  /etc/systemd/journald.conf.d
+sudo install -o root -g root -m 644 \
+  deploy/90-nanoleaf-wifi-powersave.conf \
+  /etc/NetworkManager/conf.d/90-nanoleaf-wifi-powersave.conf
+sudo install -o root -g root -m 644 \
+  deploy/60-nanoleaf-persistent-journal.conf \
+  /etc/systemd/journald.conf.d/60-nanoleaf-persistent-journal.conf
+
+sudo systemd-analyze verify \
+  /etc/systemd/system/nanoleaf-network-recovery.service \
+  /etc/systemd/system/nanoleaf-network-recovery.timer
+sudo systemctl daemon-reload
+sudo systemctl enable nanoleaf-network-recovery.timer
+```
+
+Use a planned reboot to apply the NetworkManager and journald policies without
+dropping an active SSH session mid-command. After reconnecting, verify:
+
+```bash
+systemctl is-enabled nanoleaf-network-recovery.timer
+systemctl is-active nanoleaf-network-recovery.timer
+systemctl list-timers nanoleaf-network-recovery.timer --no-pager
+systemd-analyze cat-config systemd/journald.conf | grep -E 'Storage=|SystemMaxUse=|MaxRetentionSec='
+nmcli -g 802-11-wireless.powersave connection show <active-profile>
+journalctl --list-boots --no-pager
+```
+
+The NetworkManager value `2` means Wi-Fi power saving is disabled. Persistent
+journal history appears after the next boot boundary; the first boot cannot
+retroactively recover logs erased by an earlier reboot.
+
 ## Upgrade
 
 Use a fast-forward-only pull so an unexpected local divergence cannot be

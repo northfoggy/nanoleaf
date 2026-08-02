@@ -84,6 +84,29 @@ lines. The persistent file rotates at 1 MB with three backups.
 Logs are redacted by the application, but use the redaction pipeline in
 [Troubleshooting](TROUBLESHOOTING.md) before sharing any output.
 
+System journals are configured for persistent storage with a 64 MB cap and a
+14-day retention limit when the supplied journald drop-in is installed:
+
+```bash
+journalctl --list-boots --no-pager
+journalctl --disk-usage --no-pager
+```
+
+## Network recovery
+
+Inspect the gateway recovery timer without manually invoking recovery:
+
+```bash
+systemctl status nanoleaf-network-recovery.timer --no-pager
+systemctl list-timers nanoleaf-network-recovery.timer --no-pager
+sudo journalctl -u nanoleaf-network-recovery.service --since today --no-pager
+```
+
+The timer treats loss of the default route or gateway as a server-network
+failure. It does not use Nanoleaf reachability as a reboot condition. A manual
+test of the service is safe only while the gateway is reachable; otherwise it
+increments the real recovery counter.
+
 ## Verify a single server
 
 ```bash
@@ -127,6 +150,8 @@ abnormal. Consult the OOM section in [Troubleshooting](TROUBLESHOOTING.md).
 8. Start the service.
 9. Check `/api/health`, simulator status, memory, and restart count.
 10. Load the dashboard from another LAN device.
+11. Confirm the network recovery timer is active and persistent journal usage
+    remains bounded.
 
 ## Backup and recovery
 

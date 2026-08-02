@@ -4,10 +4,10 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_v020_release_metadata_uses_company_identity():
+def test_release_metadata_uses_company_identity():
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert 'version = "0.2.0"' in metadata
+    assert 'version = "0.2.1"' in metadata
     assert 'authors = [{ name = "Quicksilver Industries LTD." }]' in metadata
     personal_username = "north" + "foggy"
     assert personal_username not in metadata.lower()
@@ -33,3 +33,4 @@ def test_source_distribution_includes_changelog():
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
 
     assert "include CHANGELOG.md" in manifest
+    assert "recursive-include deploy *" in manifest

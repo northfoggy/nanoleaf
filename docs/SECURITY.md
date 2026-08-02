@@ -65,8 +65,10 @@ Unsafe actions:
 - copying a token into a long-lived shell history via `setup` when pairing is
   available.
 
-Application errors redact credential-bearing URLs and token assignments before
-writing simulator logs or returning API errors.
+Application errors redact complete and relative credential-bearing API URLs and
+token assignments before writing simulator logs or returning API errors. File
+logging also scrubs the active simulator log and its three bounded rotations at
+startup.
 
 ## Filesystem permissions
 
@@ -102,6 +104,12 @@ The included unit applies:
 
 These settings limit host impact but do not authenticate dashboard users.
 
+The optional network-recovery service runs as root because it must ask
+NetworkManager to reconnect Wi-Fi and may request a guarded reboot. Its script
+is root-owned, checks only the default gateway, writes only to systemd-managed
+state/runtime directories, uses a six-hour reboot cooldown, and is sandboxed by
+its service unit. Do not make the script writable by the application account.
+
 ## SSH administration
 
 Use a dedicated key rather than sharing a password. Keep its private half
@@ -126,7 +134,8 @@ account.
 
 Logs can reveal location, device state, network addresses, and—on historical
 versions—credential-bearing URLs. Current logging redacts known token formats,
-uses owner-only permissions, and rotates at bounded size.
+uses owner-only permissions, rotates at bounded size, and scrubs bounded
+rotations during startup.
 
 Before sharing logs, pass them through the redaction filter documented in
 [Troubleshooting](TROUBLESHOOTING.md) and inspect the result manually.
