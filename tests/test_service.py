@@ -63,6 +63,7 @@ def test_network_recovery_is_gateway_scoped_and_guarded():
 
     assert "Type=oneshot" in service
     assert "StateDirectory=nanoleaf-network-recovery" in service
+    assert "RuntimeDirectoryPreserve=yes" in service
     assert "ProtectSystem=strict" in service
     assert "OnBootSec=5min" in timer
     assert "OnUnitActiveSec=2min" in timer

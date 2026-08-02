@@ -107,7 +107,8 @@ accepts either an ICMP response or a usable kernel neighbour entry from the
 gateway. This avoids treating an ICMP-filtering router as offline. It does not
 use Nanoleaf reachability as a reboot condition. A manual test of the service is
 safe only while the gateway is reachable; otherwise it increments the real
-recovery counter.
+recovery counter. The counter persists between timer invocations in `/run` and
+resets naturally when the Pi boots.
 
 ## Verify a single server
 
