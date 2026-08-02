@@ -363,7 +363,7 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
                 break
             if override_active:
                 still_active, expired_during_sleep = _update_timed_override()
-                if expired_during_sleep:
+                if expired_during_sleep or not still_active:
                     last_state_key = None
                     last_applied_brightness = None
                     break

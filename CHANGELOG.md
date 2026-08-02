@@ -11,6 +11,8 @@ This project follows semantic versioning while it remains experimental.
   automation write from winning the activation race.
 - Expiring nap and manual overrides now always invalidate the cached automatic
   target so daylight is reapplied even when the target itself has not changed.
+- Ending a nap or manual override early now interrupts the minute-long sleep so
+  the current daylight state is restored immediately.
 
 ## 0.3.0
 

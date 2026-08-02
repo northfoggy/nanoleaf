@@ -342,6 +342,45 @@ def test_expiry_reapplies_unchanged_automatic_target(monkeypatch):
     assert len(applied) == 2
 
 
+def test_canceling_override_breaks_sleep_and_reapplies_immediately(monkeypatch):
+    applied = []
+    sleeps = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_sim_generation", 31)
+    monkeypatch.setattr(web, "_control_mode", "manual_override")
+    monkeypatch.setattr(web, "_manual_override_until", web.time.time() + 3_600)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(
+        web.sunlight,
+        "compute_window_light",
+        lambda *_: {
+            "phase": "daylight", "mode": "color_temp",
+            "color_temp": 5000, "brightness": 50,
+        },
+    )
+
+    def apply_light(*_args, **_kwargs):
+        applied.append(True)
+        monkeypatch.setattr(web, "_sim_running", False)
+
+    def cancel_during_sleep(_seconds):
+        sleeps.append(True)
+        monkeypatch.setattr(web, "_control_mode", "automation")
+        monkeypatch.setattr(web, "_manual_override_until", None)
+
+    monkeypatch.setattr(web.sunlight, "apply_light", apply_light)
+    monkeypatch.setattr(web.time, "sleep", cancel_during_sleep)
+
+    web._run_sim_loop_inner(
+        object(), web.sunlight.WindowConfig(), weather_cache=None,
+        my_generation=31, demo=False,
+    )
+
+    assert applied == [True]
+    assert len(sleeps) == 1
+
+
 def test_manual_override_pauses_demo_without_applying(monkeypatch):
     applied = []
     sleeps = []
