@@ -2,6 +2,20 @@
 
 This project follows semantic versioning while it remains experimental.
 
+## 0.3.0
+
+### Added
+
+- Nap Mode, which applies a dim warm-amber scene for a configurable duration
+  and then hands control back to daylight automation automatically.
+- Dashboard controls and live status for starting a nap, seeing its scheduled
+  end, and returning to automation early.
+
+### Changed
+
+- Timed overrides are checked once per second so the post-nap daylight state is
+  restored promptly instead of waiting for the next minute-long cycle.
+
 ## 0.2.2
 
 ### Fixed

@@ -62,6 +62,12 @@ start a one-hour manual override. Use Resume automation to return control early.
 Use Stop only when the simulator itself should stop; the dashboard and systemd
 service remain running.
 
+Nap Mode defaults to 40 minutes at 5% warm-amber brightness. Set the desired
+duration and brightness, then select Start nap. The dashboard shows the
+scheduled end time, and daylight automation resumes automatically within about
+one second of that time. Select End nap to resume early. Nap Mode requires the
+sunlight simulator to be running so there is an automation state to restore.
+
 ## Logs
 
 Systemd lifecycle and HTTP request logs:

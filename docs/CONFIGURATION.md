@@ -119,6 +119,15 @@ Direct CLI commands and third-party controllers are not able to set the web
 process's override state. Brightness readback provides best-effort conflict
 detection for those controllers.
 
+## Nap Mode
+
+Nap Mode is a specialized timed override available from the dashboard and HTTP
+API. It defaults to 40 minutes at 5% brightness, uses a warm amber RGB scene,
+and accepts durations from 5 to 180 minutes and brightness from 1% to 20%.
+These values apply to the current nap only and are not persisted. When the timer
+expires or End nap is selected, the simulator promptly reapplies the current
+weather-aware daylight state.
+
 ## Runtime files
 
 | File | Role |
