@@ -18,9 +18,36 @@ default_gateway() {
     ip -4 route show default dev "$interface" | awk 'NR == 1 { print $3 }'
 }
 
+link_is_connected() {
+    state="$(nmcli -g GENERAL.STATE device show "$interface" 2>/dev/null || true)"
+    case "$state" in
+        100*|connected*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+gateway_neighbor_is_usable() {
+    gateway="$1"
+    state="$(ip neigh show to "$gateway" dev "$interface" 2>/dev/null | awk 'NR == 1 { print $NF }')"
+    case "$state" in
+        REACHABLE|STALE|DELAY|PROBE|PERMANENT|NOARP) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 network_is_healthy() {
     gateway="$(default_gateway)"
-    [ -n "$gateway" ] && ping -c 1 -W 2 "$gateway" >/dev/null 2>&1
+    [ -n "$gateway" ] || return 1
+    link_is_connected || return 1
+
+    if ping -c 1 -W 2 "$gateway" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # A gateway may intentionally reject ICMP while remaining reachable. The
+    # ping still triggers neighbour discovery, so accept a usable kernel
+    # neighbour entry rather than cycling or rebooting a working connection.
+    gateway_neighbor_is_usable "$gateway"
 }
 
 read_nonnegative_integer() {

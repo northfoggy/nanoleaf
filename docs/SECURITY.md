@@ -106,9 +106,11 @@ These settings limit host impact but do not authenticate dashboard users.
 
 The optional network-recovery service runs as root because it must ask
 NetworkManager to reconnect Wi-Fi and may request a guarded reboot. Its script
-is root-owned, checks only the default gateway, writes only to systemd-managed
-state/runtime directories, uses a six-hour reboot cooldown, and is sandboxed by
-its service unit. Do not make the script writable by the application account.
+is root-owned, checks the default route, NetworkManager link, and local gateway,
+writes only to systemd-managed state/runtime directories, uses a six-hour
+reboot cooldown, and is sandboxed by its service unit. A failed ICMP probe alone
+cannot trigger recovery. Do not make the script writable by the application
+account.
 
 ## SSH administration
 

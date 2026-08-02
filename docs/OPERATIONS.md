@@ -102,10 +102,12 @@ systemctl list-timers nanoleaf-network-recovery.timer --no-pager
 sudo journalctl -u nanoleaf-network-recovery.service --since today --no-pager
 ```
 
-The timer treats loss of the default route or gateway as a server-network
-failure. It does not use Nanoleaf reachability as a reboot condition. A manual
-test of the service is safe only while the gateway is reachable; otherwise it
-increments the real recovery counter.
+The timer requires a default route and connected NetworkManager link, then
+accepts either an ICMP response or a usable kernel neighbour entry from the
+gateway. This avoids treating an ICMP-filtering router as offline. It does not
+use Nanoleaf reachability as a reboot condition. A manual test of the service is
+safe only while the gateway is reachable; otherwise it increments the real
+recovery counter.
 
 ## Verify a single server
 

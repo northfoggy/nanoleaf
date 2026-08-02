@@ -150,11 +150,14 @@ Healthy output has `ActiveState=active`, `SubState=running`, a nonzero
 
 ## Install network resilience and persistent diagnostics
 
-The optional recovery timer checks the Pi's default gateway, not the Nanoleaf.
-This prevents an unplugged or updating light from causing a server reboot. With
-the supplied defaults, three consecutive two-minute failures cause a
-NetworkManager reconnect. Eight consecutive failures request a reboot, with a
-six-hour persistent cooldown to prevent a reboot loop during a router outage.
+The optional recovery timer checks the Pi's default route, NetworkManager link,
+and local gateway, not the Nanoleaf. A gateway is accepted when it replies to
+ICMP or has a usable kernel neighbour entry, so routers that intentionally
+reject ping do not trigger recovery. This also prevents an unplugged or
+updating light from causing a server reboot. With the supplied defaults, three
+consecutive two-minute failures cause a NetworkManager reconnect. Eight
+consecutive failures request a reboot, with a six-hour persistent cooldown to
+prevent a reboot loop during a router outage.
 
 Review and install the assets:
 

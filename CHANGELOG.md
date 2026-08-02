@@ -2,6 +2,15 @@
 
 This project follows semantic versioning while it remains experimental.
 
+## 0.2.2
+
+### Fixed
+
+- Network recovery now verifies the NetworkManager link and accepts a usable
+  kernel neighbour entry when a working gateway intentionally rejects ICMP.
+  This prevents false Wi-Fi reconnects and guarded reboots based only on a
+  failed ping.
+
 ## 0.2.1
 
 This reliability and security release addresses a sustained Raspberry Pi Wi-Fi
