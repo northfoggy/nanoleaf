@@ -69,6 +69,24 @@ If localhost works but another LAN device does not:
 - inspect host firewall rules;
 - check that guest Wi-Fi client isolation is not enabled.
 
+If both the dashboard and SSH were unreachable until the Pi rebooted, inspect
+the previous boot before drawing conclusions:
+
+```bash
+journalctl --list-boots --no-pager
+sudo journalctl -b -1 -u NetworkManager --no-pager
+sudo journalctl -b -1 -k --no-pager |
+  grep -Ei 'wlan|brcm|firmware|dhcp|route|under.?voltage|oom|mmc|i/o error'
+sudo journalctl -b -1 -u nanoleaf.service --no-pager
+```
+
+Repeated application errors containing `Network is unreachable`, while the
+simulator continues logging on schedule, indicate that the application process
+is alive but the host has lost its route. An application restart alone cannot
+repair that condition. If `journalctl --list-boots` shows only the current boot,
+install the bounded persistent-journal configuration from Installation before
+the next incident.
+
 ## Device offline
 
 The web service should remain healthy when the Nanoleaf is unavailable.
@@ -169,7 +187,7 @@ Use this pipeline for journal or log output:
 
 ```bash
 sed -E \
-  -e 's#(https?://[^ ]+/api/v1/)[^/ ]+#\1[REDACTED]#g' \
+  -e 's#((https?://[^ ]+)?/api/v1/)[^/ ]+#\1[REDACTED]#g' \
   -e 's#(auth[_ -]?token[=: ]+)[^,; ]+#\1[REDACTED]#Ig'
 ```
 

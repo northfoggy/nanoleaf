@@ -58,12 +58,15 @@ def test_run_notifies_ready_only_after_server_is_bound(monkeypatch):
 
 def test_redact_removes_token_from_urls_and_messages():
     secret = "this-is-the-device-secret"
-    text = f"failed at http://10.0.0.2:16021/api/v1/{secret}/state auth_token={secret}"
+    text = (
+        f"failed at http://10.0.0.2:16021/api/v1/{secret}/state "
+        f"and /api/v1/{secret}/state auth_token={secret}"
+    )
 
     redacted = web._redact(text)
 
     assert secret not in redacted
-    assert redacted.count("[REDACTED]") == 2
+    assert redacted.count("[REDACTED]") == 3
 
 
 def test_existing_log_scrub_is_bounded_and_redacted(tmp_path, monkeypatch):
@@ -82,6 +85,25 @@ def test_existing_log_scrub_is_bounded_and_redacted(tmp_path, monkeypatch):
     assert log_path.stat().st_size <= 1024
     assert secret not in scrubbed
     assert "[REDACTED]" in scrubbed
+
+
+def test_log_family_scrubs_rotated_relative_urls(tmp_path):
+    secret = "this-is-the-device-secret"
+    log_path = tmp_path / "sunlight.log"
+    for suffix in ("", ".1", ".2", ".3"):
+        (tmp_path / f"sunlight.log{suffix}").write_text(
+            f"request failed for /api/v1/{secret}/state\n",
+            encoding="utf-8",
+        )
+
+    web._scrub_log_family(str(log_path))
+
+    for suffix in ("", ".1", ".2", ".3"):
+        scrubbed = (tmp_path / f"sunlight.log{suffix}").read_text(encoding="utf-8")
+        assert secret not in scrubbed
+        assert "/api/v1/[REDACTED]/state" in scrubbed
+        if os.name != "nt":
+            assert (tmp_path / f"sunlight.log{suffix}").stat().st_mode & 0o777 == 0o600
 
 
 def test_api_failure_does_not_return_transport_details(monkeypatch):

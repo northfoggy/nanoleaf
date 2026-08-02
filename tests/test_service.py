@@ -30,3 +30,46 @@ def test_reference_deployment_documentation_matches_systemd_unit():
     assert "git -C /opt/nanoleaf log -1 --oneline" in troubleshooting
     assert "/opt/nanoleaf/venv/bin/python --version" in troubleshooting
     assert '$HOME/nanoleaf' not in troubleshooting
+
+
+def test_network_recovery_is_gateway_scoped_and_guarded():
+    root = Path(__file__).parents[1]
+    script = (root / "deploy" / "nanoleaf-network-recovery").read_text(
+        encoding="utf-8"
+    )
+    service = (root / "deploy" / "nanoleaf-network-recovery.service").read_text(
+        encoding="utf-8"
+    )
+    timer = (root / "deploy" / "nanoleaf-network-recovery.timer").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'ip -4 route show default dev "$interface"' in script
+    assert 'ping -c 1 -W 2 "$gateway"' in script
+    assert "nanoleafapi" not in script.lower()
+    assert 'reconnect_threshold="${NANOLEAF_RECONNECT_THRESHOLD:-3}"' in script
+    assert 'reboot_threshold="${NANOLEAF_REBOOT_THRESHOLD:-8}"' in script
+    assert 'reboot_cooldown="${NANOLEAF_REBOOT_COOLDOWN_SECONDS:-21600}"' in script
+    assert 'nmcli device connect "$interface"' in script
+    assert "systemctl reboot" in script
+
+    assert "Type=oneshot" in service
+    assert "StateDirectory=nanoleaf-network-recovery" in service
+    assert "ProtectSystem=strict" in service
+    assert "OnBootSec=5min" in timer
+    assert "OnUnitActiveSec=2min" in timer
+
+
+def test_pi_observability_and_wifi_policy_are_bounded():
+    root = Path(__file__).parents[1]
+    journal = (root / "deploy" / "60-nanoleaf-persistent-journal.conf").read_text(
+        encoding="utf-8"
+    )
+    wifi = (root / "deploy" / "90-nanoleaf-wifi-powersave.conf").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Storage=persistent" in journal
+    assert "SystemMaxUse=64M" in journal
+    assert "MaxRetentionSec=14day" in journal
+    assert "wifi.powersave=2" in wifi

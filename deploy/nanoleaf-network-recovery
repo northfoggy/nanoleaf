@@ -1,0 +1,86 @@
+#!/bin/sh
+set -eu
+
+interface="${NANOLEAF_NETWORK_INTERFACE:-wlan0}"
+reconnect_threshold="${NANOLEAF_RECONNECT_THRESHOLD:-3}"
+reboot_threshold="${NANOLEAF_REBOOT_THRESHOLD:-8}"
+reboot_cooldown="${NANOLEAF_REBOOT_COOLDOWN_SECONDS:-21600}"
+runtime_dir="${RUNTIME_DIRECTORY:-/run/nanoleaf-network-recovery}"
+state_dir="${STATE_DIRECTORY:-/var/lib/nanoleaf-network-recovery}"
+count_file="${runtime_dir}/failures"
+last_reboot_file="${state_dir}/last-reboot-request"
+
+log_event() {
+    logger -t nanoleaf-network-recovery -- "$*"
+}
+
+default_gateway() {
+    ip -4 route show default dev "$interface" | awk 'NR == 1 { print $3 }'
+}
+
+network_is_healthy() {
+    gateway="$(default_gateway)"
+    [ -n "$gateway" ] && ping -c 1 -W 2 "$gateway" >/dev/null 2>&1
+}
+
+read_nonnegative_integer() {
+    file="$1"
+    value=0
+    if [ -r "$file" ]; then
+        value="$(cat "$file")"
+    fi
+    case "$value" in
+        ''|*[!0-9]*) value=0 ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+write_count() {
+    value="$1"
+    temp_file="${count_file}.tmp"
+    printf '%s\n' "$value" >"$temp_file"
+    mv -f "$temp_file" "$count_file"
+}
+
+if network_is_healthy; then
+    previous="$(read_nonnegative_integer "$count_file")"
+    write_count 0
+    if [ "$previous" -gt 0 ]; then
+        log_event "gateway connectivity recovered after ${previous} failed checks"
+    fi
+    exit 0
+fi
+
+failures="$(read_nonnegative_integer "$count_file")"
+failures=$((failures + 1))
+write_count "$failures"
+log_event "gateway unreachable on ${interface}; consecutive failure ${failures}"
+
+if [ "$failures" -eq "$reconnect_threshold" ]; then
+    log_event "cycling ${interface} through NetworkManager"
+    nmcli device disconnect "$interface" >/dev/null 2>&1 || true
+    sleep 3
+    nmcli device connect "$interface" >/dev/null 2>&1 || true
+    sleep 12
+    if network_is_healthy; then
+        write_count 0
+        log_event "gateway connectivity recovered after NetworkManager reconnect"
+        exit 0
+    fi
+fi
+
+if [ "$failures" -ge "$reboot_threshold" ]; then
+    now="$(date +%s)"
+    last_reboot="$(read_nonnegative_integer "$last_reboot_file")"
+    elapsed=$((now - last_reboot))
+    if [ "$last_reboot" -eq 0 ] || [ "$elapsed" -ge "$reboot_cooldown" ]; then
+        printf '%s\n' "$now" >"$last_reboot_file"
+        log_event "gateway still unreachable; requesting guarded reboot"
+        sync
+        systemctl reboot
+    else
+        log_event "reboot suppressed by cooldown"
+    fi
+fi
+
+exit 0

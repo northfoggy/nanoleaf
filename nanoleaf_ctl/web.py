@@ -90,6 +90,12 @@ def _scrub_existing_log(log_path: str) -> None:
             pass
 
 
+def _scrub_log_family(log_path: str) -> None:
+    """Scrub the active simulator log and each bounded rotation."""
+    for suffix in ("", ".1", ".2", ".3"):
+        _scrub_existing_log(f"{log_path}{suffix}")
+
+
 def _setup_file_logging() -> None:
     """Set up persistent file logging so crashes are traceable."""
     global _log_handler
@@ -100,7 +106,7 @@ def _setup_file_logging() -> None:
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
         os.chmod(log_dir, 0o700)
         log_path = os.path.join(log_dir, "sunlight.log")
-        _scrub_existing_log(log_path)
+        _scrub_log_family(log_path)
         _log_handler = RotatingFileHandler(
             log_path,
             maxBytes=_LOG_MAX_BYTES,
@@ -117,7 +123,7 @@ def _redact(text: object) -> str:
     """Remove Nanoleaf credentials and credential-bearing URLs from text."""
     value = str(text)
     value = re.sub(
-        r"(https?://[^\s]+?/api/v1/)[^/\s?]+",
+        r"((?:https?://[^\s]+?)?/api/v1/)[^/\s?'\"()]+",
         r"\1[REDACTED]",
         value,
         flags=re.IGNORECASE,

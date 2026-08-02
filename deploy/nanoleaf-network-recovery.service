@@ -1,0 +1,19 @@
+[Unit]
+Description=Recover sustained NanoLeaf server network outages
+After=NetworkManager.service network.target
+Wants=NetworkManager.service
+ConditionPathExists=/usr/bin/nmcli
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nanoleaf-network-recovery
+Environment=NANOLEAF_NETWORK_INTERFACE=wlan0
+RuntimeDirectory=nanoleaf-network-recovery
+RuntimeDirectoryMode=0700
+StateDirectory=nanoleaf-network-recovery
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
