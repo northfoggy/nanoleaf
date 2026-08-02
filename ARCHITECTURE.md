@@ -156,12 +156,14 @@ ends, forcing prompt reconciliation with the current daylight calculation.
 Several mechanisms address different duplicate-controller risks:
 
 1. `_sim_lock` serializes state changes inside the web process.
-2. A generation counter causes superseded simulator threads to exit.
-3. `sunlight.lock` uses an OS-level exclusive file lock to prevent another
+2. `_device_write_lock` coordinates automation and Nap Mode device writes;
+   Nap Mode reserves control before its write and rolls back on failure.
+3. A generation counter causes superseded simulator threads to exit.
+4. `sunlight.lock` uses an OS-level exclusive file lock to prevent another
    local process from running the simulator.
-4. The lock records `hostname:pid` for diagnostics.
-5. Device-brightness readback detects likely control by another machine.
-6. systemd is the sole documented production launch path on the Pi.
+5. The lock records `hostname:pid` for diagnostics.
+6. Device-brightness readback detects likely control by another machine.
+7. systemd is the sole documented production launch path on the Pi.
 
 The file lock only protects one host. It cannot prevent a controller on a
 different computer from controlling the same Nanoleaf.

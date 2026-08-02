@@ -1,4 +1,5 @@
 import os
+import threading
 
 import pytest
 import requests
@@ -155,11 +156,11 @@ def test_nap_mode_applies_amber_scene_and_reports_status(monkeypatch):
     monkeypatch.setattr(web, "_device_online", True)
     monkeypatch.setattr(web, "_get_nl", lambda: object())
     monkeypatch.setattr(web.time, "time", lambda: 1_000.0)
-    monkeypatch.setattr(
-        web.sunlight,
-        "apply_light",
-        lambda nl, state, transition: applied.append((nl, state, transition)),
-    )
+    def apply_nap(nl, state, transition):
+        assert web._control_mode == "nap"
+        applied.append((nl, state, transition))
+
+    monkeypatch.setattr(web.sunlight, "apply_light", apply_nap)
 
     client = web.app.test_client()
     response = client.post("/api/nap/start", json={"minutes": 40, "brightness": 5})
@@ -175,6 +176,87 @@ def test_nap_mode_applies_amber_scene_and_reports_status(monkeypatch):
     assert status["nap"] == {
         "until": 3_400.0, "brightness": 5, "rgb": [255, 106, 0],
     }
+
+
+def test_nap_mode_rolls_back_reservation_when_device_write_fails(monkeypatch):
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "manual_override")
+    monkeypatch.setattr(web, "_manual_override_until", 9_999.0)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web.time, "time", lambda: 1_000.0)
+
+    def fail_after_reservation(*_args, **_kwargs):
+        assert web._control_mode == "nap"
+        raise requests.ConnectionError("device unavailable")
+
+    monkeypatch.setattr(web.sunlight, "apply_light", fail_after_reservation)
+
+    response = web.app.test_client().post("/api/nap/start", json={})
+
+    assert response.status_code == 502
+    assert web._control_mode == "manual_override"
+    assert web._manual_override_until == 9_999.0
+    assert web._nap_brightness is None
+    assert web._device_online is False
+
+
+def test_automation_rechecks_override_after_waiting_for_write_lock(monkeypatch):
+    applied = []
+    first_check_complete = threading.Event()
+    write_lock = threading.Lock()
+    real_update = web._update_timed_override
+    update_calls = 0
+
+    def tracked_update(now=None):
+        nonlocal update_calls
+        update_calls += 1
+        result = real_update(now)
+        if update_calls == 1:
+            first_check_complete.set()
+        return result
+
+    monkeypatch.setattr(web, "_device_write_lock", write_lock)
+    monkeypatch.setattr(web, "_update_timed_override", tracked_update)
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_sim_generation", 29)
+    monkeypatch.setattr(web, "_control_mode", "automation")
+    monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", False)
+    monkeypatch.setattr(
+        web.sunlight,
+        "compute_window_light",
+        lambda *_: {
+            "phase": "daylight", "mode": "color_temp",
+            "color_temp": 5000, "brightness": 50,
+        },
+    )
+    monkeypatch.setattr(
+        web.sunlight, "apply_light",
+        lambda *_args, **_kwargs: applied.append(True),
+    )
+    monkeypatch.setattr(
+        web.time, "sleep",
+        lambda _seconds: monkeypatch.setattr(web, "_sim_running", False),
+    )
+
+    write_lock.acquire()
+    worker = threading.Thread(target=web._run_sim_loop_inner, args=(
+        object(), web.sunlight.WindowConfig(), None, 29, False,
+    ))
+    worker.start()
+    assert first_check_complete.wait(timeout=1)
+    monkeypatch.setattr(web, "_control_mode", "nap")
+    monkeypatch.setattr(web, "_manual_override_until", web.time.time() + 60)
+    monkeypatch.setattr(web, "_nap_brightness", 5)
+    write_lock.release()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert update_calls >= 2
+    assert applied == []
 
 
 def test_nap_mode_requires_running_automation(monkeypatch):
@@ -209,11 +291,94 @@ def test_nap_mode_expiry_resumes_automation(monkeypatch):
     monkeypatch.setattr(web, "_nap_brightness", 5)
     monkeypatch.setattr(web, "_log", messages.append)
 
-    assert web._timed_override_active(now=3_400.0) is False
+    assert web._update_timed_override(now=3_400.0) == (False, True)
     assert web._control_mode == "automation"
     assert web._manual_override_until is None
     assert web._nap_brightness is None
     assert messages == ["Nap mode complete; resuming automation"]
+
+
+def test_expiry_reapplies_unchanged_automatic_target(monkeypatch):
+    applied = []
+    sleeps = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_sim_generation", 23)
+    monkeypatch.setattr(web, "_control_mode", "automation")
+    monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_device_get", lambda *_: {"value": 50})
+    monkeypatch.setattr(
+        web.sunlight,
+        "compute_window_light",
+        lambda *_: {
+            "phase": "daylight", "mode": "color_temp",
+            "color_temp": 5000, "brightness": 50,
+        },
+    )
+
+    def apply_light(*_args, **_kwargs):
+        applied.append(True)
+        if len(applied) == 2:
+            monkeypatch.setattr(web, "_sim_running", False)
+
+    def advance_sleep(_seconds):
+        sleeps.append(True)
+        if len(sleeps) == 1:
+            monkeypatch.setattr(web, "_control_mode", "nap")
+            monkeypatch.setattr(web, "_manual_override_until", 0.0)
+            monkeypatch.setattr(web, "_nap_brightness", 5)
+        if len(sleeps) > 120:
+            monkeypatch.setattr(web, "_sim_running", False)
+
+    monkeypatch.setattr(web.sunlight, "apply_light", apply_light)
+    monkeypatch.setattr(web.time, "sleep", advance_sleep)
+
+    web._run_sim_loop_inner(
+        object(), web.sunlight.WindowConfig(), weather_cache=None,
+        my_generation=23, demo=False,
+    )
+
+    assert len(applied) == 2
+
+
+def test_canceling_override_breaks_sleep_and_reapplies_immediately(monkeypatch):
+    applied = []
+    sleeps = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_sim_generation", 31)
+    monkeypatch.setattr(web, "_control_mode", "manual_override")
+    monkeypatch.setattr(web, "_manual_override_until", web.time.time() + 3_600)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(
+        web.sunlight,
+        "compute_window_light",
+        lambda *_: {
+            "phase": "daylight", "mode": "color_temp",
+            "color_temp": 5000, "brightness": 50,
+        },
+    )
+
+    def apply_light(*_args, **_kwargs):
+        applied.append(True)
+        monkeypatch.setattr(web, "_sim_running", False)
+
+    def cancel_during_sleep(_seconds):
+        sleeps.append(True)
+        monkeypatch.setattr(web, "_control_mode", "automation")
+        monkeypatch.setattr(web, "_manual_override_until", None)
+
+    monkeypatch.setattr(web.sunlight, "apply_light", apply_light)
+    monkeypatch.setattr(web.time, "sleep", cancel_during_sleep)
+
+    web._run_sim_loop_inner(
+        object(), web.sunlight.WindowConfig(), weather_cache=None,
+        my_generation=31, demo=False,
+    )
+
+    assert applied == [True]
+    assert len(sleeps) == 1
 
 
 def test_manual_override_pauses_demo_without_applying(monkeypatch):

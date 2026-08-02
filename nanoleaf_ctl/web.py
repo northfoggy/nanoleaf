@@ -42,6 +42,7 @@ def _sd_notify(state: str) -> None:
 # ── Shared state for the sunlight simulator thread ──────────────────
 
 _sim_lock = threading.Lock()
+_device_write_lock = threading.Lock()
 _sim_thread: threading.Thread | None = None
 _sim_state: dict | None = None        # latest computed light state
 _sim_config: sunlight.WindowConfig | None = None
@@ -163,8 +164,8 @@ def _begin_manual_override(minutes: int = 60) -> None:
             _log(f"Manual override started for {minutes} minutes")
 
 
-def _timed_override_active(now: float | None = None) -> bool:
-    """Expire manual or nap control and report whether automation is paused."""
+def _update_timed_override(now: float | None = None) -> tuple[bool, bool]:
+    """Expire timed control and return ``(active, expired_this_call)``."""
     global _control_mode, _manual_override_until, _nap_brightness
     expired_mode = None
     current_time = time.time() if now is None else now
@@ -181,7 +182,7 @@ def _timed_override_active(now: float | None = None) -> bool:
         _log("Nap mode complete; resuming automation")
     elif expired_mode == "manual_override":
         _log("Manual override expired; resuming automation")
-    return timed_mode
+    return timed_mode, expired_mode is not None
 
 
 def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
@@ -285,31 +286,42 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         with _sim_lock:
             _sim_state = state
 
-        override_active = _timed_override_active()
-        if not override_active:
-            with _sim_lock:
-                if _control_mode == "automation" and last_applied_brightness is None:
-                    last_state_key = None
+        override_active, override_expired = _update_timed_override()
+        if override_expired:
+            # The device still shows the override scene. Invalidate both
+            # cached values even when the newly computed target is unchanged.
+            last_state_key = None
+            last_applied_brightness = None
 
         applied = False
         try:
             if override_active:
                 _log(f"{_control_mode.replace('_', ' ').title()} active, skipping automation apply")
             elif not _device_online or state_key != last_state_key:
-                _log(f"Applying: {state['mode']} br={state['brightness']} "
-                     f"{'rgb=' + str(state.get('rgb')) if state['mode'] == 'color' else 'ct=' + str(state.get('color_temp'))}")
-                transition = 5 if demo else 60
-                sunlight.apply_light(nl, state, transition=transition)
-                _log("Applied OK")
-                last_applied_brightness = state["brightness"]
-                last_state_key = state_key
-                applied = True
-                with _sim_lock:
-                    if not _device_online:
-                        _log("Device reconnected")
-                    _device_online = True
-                    _device_last_seen = time.time()
-                    _last_device_error = None
+                with _device_write_lock:
+                    # Nap Mode can be reserved while this loop waits for the
+                    # write lock. Recheck before touching the device.
+                    override_active, expired_while_waiting = _update_timed_override()
+                    if expired_while_waiting:
+                        last_state_key = None
+                        last_applied_brightness = None
+                    if override_active:
+                        _log("Timed override reserved, skipping automation apply")
+                    else:
+                        _log(f"Applying: {state['mode']} br={state['brightness']} "
+                             f"{'rgb=' + str(state.get('rgb')) if state['mode'] == 'color' else 'ct=' + str(state.get('color_temp'))}")
+                        transition = 5 if demo else 60
+                        sunlight.apply_light(nl, state, transition=transition)
+                        _log("Applied OK")
+                        last_applied_brightness = state["brightness"]
+                        last_state_key = state_key
+                        applied = True
+                        with _sim_lock:
+                            if not _device_online:
+                                _log("Device reconnected")
+                            _device_online = True
+                            _device_last_seen = time.time()
+                            _last_device_error = None
             else:
                 _log("No change, skipping apply")
         except (_requests.RequestException, OSError) as e:
@@ -349,10 +361,13 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         for _ in range(sleep_secs):
             if not _sim_running or _sim_generation != my_generation:
                 break
-            if override_active and not _timed_override_active():
-                last_state_key = None
-                last_applied_brightness = None
-                break
+            if override_active:
+                still_active, expired_during_sleep = _update_timed_override()
+                if expired_during_sleep or not still_active:
+                    last_state_key = None
+                    last_applied_brightness = None
+                    break
+                override_active = still_active
             time.sleep(1)
 
 
@@ -572,24 +587,49 @@ def api_nap_start():
 
     try:
         nl = _get_nl()
-        sunlight.apply_light(nl, {
-            "mode": "color",
-            "rgb": _NAP_RGB,
-            "brightness": brightness,
-        }, transition=5)
     except Exception as e:
         return _api_failure(e, "start Nap Mode")
 
-    until = time.time() + duration * 60
-    with _sim_lock:
-        if not _sim_running:
-            return jsonify({"status": "error", "error": "Simulator stopped during Nap Mode setup"}), 409
-        _control_mode = "nap"
-        _manual_override_until = until
-        _nap_brightness = brightness
-        _device_online = True
-        _device_last_seen = time.time()
-        _last_device_error = None
+    with _device_write_lock:
+        until = time.time() + duration * 60
+        with _sim_lock:
+            if not _sim_running:
+                return jsonify({
+                    "status": "error",
+                    "error": "Sunlight automation must be running so Nap Mode can restore it",
+                }), 409
+            previous_control = (
+                _control_mode, _manual_override_until, _nap_brightness,
+            )
+            # Reserve the mode before the device write. The simulator uses the
+            # same write lock and rechecks this state after acquiring it.
+            _control_mode = "nap"
+            _manual_override_until = until
+            _nap_brightness = brightness
+
+        try:
+            sunlight.apply_light(nl, {
+                "mode": "color",
+                "rgb": _NAP_RGB,
+                "brightness": brightness,
+            }, transition=5)
+        except Exception as e:
+            with _sim_lock:
+                if _control_mode == "nap" and _manual_override_until == until:
+                    _control_mode, _manual_override_until, _nap_brightness = previous_control
+                _device_online = False
+                _last_device_error = _redact(e)
+            return _api_failure(e, "start Nap Mode")
+
+        with _sim_lock:
+            if _control_mode != "nap" or _manual_override_until != until:
+                return jsonify({
+                    "status": "error",
+                    "error": "Nap Mode setup was superseded by another control request",
+                }), 409
+            _device_online = True
+            _device_last_seen = time.time()
+            _last_device_error = None
     _log(f"Nap mode started for {duration} minutes at {brightness}% brightness")
     return jsonify({
         "status": "nap started",

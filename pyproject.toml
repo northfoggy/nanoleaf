@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanoleaf-ctl"
-version = "0.3.0"
+version = "0.3.1"
 description = "Control Nanoleaf lights from the command line or a web dashboard, with a weather-aware sunlight simulator that mimics natural window light throughout the day."
 requires-python = ">=3.10"
 license = "MIT"
