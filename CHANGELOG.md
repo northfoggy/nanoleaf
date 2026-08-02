@@ -10,6 +10,8 @@ This project follows semantic versioning while it remains experimental.
   kernel neighbour entry when a working gateway intentionally rejects ICMP.
   This prevents false Wi-Fi reconnects and guarded reboots based only on a
   failed ping.
+- The oneshot recovery unit now preserves its runtime directory so consecutive
+  failure counts survive between timer invocations within the current boot.
 
 ## 0.2.1
 

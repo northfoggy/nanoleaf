@@ -10,6 +10,7 @@ ExecStart=/usr/local/sbin/nanoleaf-network-recovery
 Environment=NANOLEAF_NETWORK_INTERFACE=wlan0
 RuntimeDirectory=nanoleaf-network-recovery
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 StateDirectory=nanoleaf-network-recovery
 StateDirectoryMode=0700
 UMask=0077
