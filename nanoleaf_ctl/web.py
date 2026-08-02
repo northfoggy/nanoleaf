@@ -54,6 +54,7 @@ _device_last_seen: float | None = None
 _last_device_error: str | None = None
 _control_mode = "automation"
 _manual_override_until: float | None = None
+_nap_brightness: int | None = None
 _sim_log: deque = deque(maxlen=200)
 _watchdog_stop = threading.Event()
 _watchdog_thread: threading.Thread | None = None
@@ -64,6 +65,9 @@ _file_logger.setLevel(logging.DEBUG)
 _log_handler = None
 _log_setup_lock = threading.Lock()
 _LOG_MAX_BYTES = 1_000_000
+_NAP_DEFAULT_MINUTES = 40
+_NAP_DEFAULT_BRIGHTNESS = 5
+_NAP_RGB = (255, 106, 0)
 
 
 def _scrub_existing_log(log_path: str) -> None:
@@ -150,12 +154,34 @@ def _api_failure(exc: Exception, operation: str):
 
 def _begin_manual_override(minutes: int = 60) -> None:
     """Pause automation after a person directly changes the lights."""
-    global _control_mode, _manual_override_until
+    global _control_mode, _manual_override_until, _nap_brightness
     with _sim_lock:
         if _sim_running:
             _control_mode = "manual_override"
             _manual_override_until = time.time() + minutes * 60
+            _nap_brightness = None
             _log(f"Manual override started for {minutes} minutes")
+
+
+def _timed_override_active(now: float | None = None) -> bool:
+    """Expire manual or nap control and report whether automation is paused."""
+    global _control_mode, _manual_override_until, _nap_brightness
+    expired_mode = None
+    current_time = time.time() if now is None else now
+    with _sim_lock:
+        timed_mode = _control_mode in ("manual_override", "nap")
+        if (timed_mode and _manual_override_until is not None
+                and current_time >= _manual_override_until):
+            expired_mode = _control_mode
+            _control_mode = "automation"
+            _manual_override_until = None
+            _nap_brightness = None
+            timed_mode = False
+    if expired_mode == "nap":
+        _log("Nap mode complete; resuming automation")
+    elif expired_mode == "manual_override":
+        _log("Manual override expired; resuming automation")
+    return timed_mode
 
 
 def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
@@ -193,7 +219,7 @@ def _run_sim_loop(nl, cfg, weather_cache, my_generation, demo=False):
 
 def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
     global _sim_state, _sim_running, _sim_file_lock, _device_online
-    global _device_last_seen, _last_device_error, _control_mode, _manual_override_until
+    global _device_last_seen, _last_device_error
 
     hostname = socket.gethostname()
     last_state_key = None
@@ -259,19 +285,16 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         with _sim_lock:
             _sim_state = state
 
-        with _sim_lock:
-            if (_control_mode == "manual_override" and _manual_override_until is not None
-                    and time.time() >= _manual_override_until):
-                _control_mode = "automation"
-                _manual_override_until = None
-                last_state_key = None
-                _log("Manual override expired; resuming automation")
-            manual_override = _control_mode == "manual_override"
+        override_active = _timed_override_active()
+        if not override_active:
+            with _sim_lock:
+                if _control_mode == "automation" and last_applied_brightness is None:
+                    last_state_key = None
 
         applied = False
         try:
-            if manual_override:
-                _log("Manual override active, skipping automation apply")
+            if override_active:
+                _log(f"{_control_mode.replace('_', ' ').title()} active, skipping automation apply")
             elif not _device_online or state_key != last_state_key:
                 _log(f"Applying: {state['mode']} br={state['brightness']} "
                      f"{'rgb=' + str(state.get('rgb')) if state['mode'] == 'color' else 'ct=' + str(state.get('color_temp'))}")
@@ -297,7 +320,7 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
                 last_state_key = None
                 last_applied_brightness = None
 
-        if demo and manual_override:
+        if demo and override_active:
             # Pause the demo clock as well as device writes. Otherwise a demo
             # would race through the simulated day while manual control is
             # active and finish before the user resumes it.
@@ -325,6 +348,10 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         # Sleep in short intervals so we can exit promptly on stop/supersede
         for _ in range(sleep_secs):
             if not _sim_running or _sim_generation != my_generation:
+                break
+            if override_active and not _timed_override_active():
+                last_state_key = None
+                last_applied_brightness = None
                 break
             time.sleep(1)
 
@@ -524,6 +551,71 @@ def api_effect():
         return _api_failure(e, "change effect")
 
 
+@app.route("/api/nap/start", methods=["POST"])
+def api_nap_start():
+    """Dim to a warm amber scene, then automatically resume automation."""
+    global _control_mode, _manual_override_until, _nap_brightness
+    global _device_online, _device_last_seen, _last_device_error
+    data = request.get_json(silent=True) or {}
+    try:
+        duration = max(5, min(180, int(data.get("minutes", _NAP_DEFAULT_MINUTES))))
+        brightness = max(1, min(20, int(data.get("brightness", _NAP_DEFAULT_BRIGHTNESS))))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Nap minutes and brightness must be integers"}), 400
+
+    with _sim_lock:
+        if not _sim_running:
+            return jsonify({
+                "status": "error",
+                "error": "Sunlight automation must be running so Nap Mode can restore it",
+            }), 409
+
+    try:
+        nl = _get_nl()
+        sunlight.apply_light(nl, {
+            "mode": "color",
+            "rgb": _NAP_RGB,
+            "brightness": brightness,
+        }, transition=5)
+    except Exception as e:
+        return _api_failure(e, "start Nap Mode")
+
+    until = time.time() + duration * 60
+    with _sim_lock:
+        if not _sim_running:
+            return jsonify({"status": "error", "error": "Simulator stopped during Nap Mode setup"}), 409
+        _control_mode = "nap"
+        _manual_override_until = until
+        _nap_brightness = brightness
+        _device_online = True
+        _device_last_seen = time.time()
+        _last_device_error = None
+    _log(f"Nap mode started for {duration} minutes at {brightness}% brightness")
+    return jsonify({
+        "status": "nap started",
+        "minutes": duration,
+        "brightness": brightness,
+        "until": until,
+    })
+
+
+@app.route("/api/nap/stop", methods=["POST"])
+def api_nap_stop():
+    """End Nap Mode early and force sunlight automation to reconcile."""
+    global _control_mode, _manual_override_until, _nap_brightness, _device_online
+    with _sim_lock:
+        if not _sim_running:
+            return jsonify({"status": "error", "error": "Simulator is not running"}), 409
+        if _control_mode != "nap":
+            return jsonify({"status": "not active"})
+        _control_mode = "automation"
+        _manual_override_until = None
+        _nap_brightness = None
+        _device_online = False
+    _log("Nap mode ended early; automation resume requested")
+    return jsonify({"status": "resuming"})
+
+
 @app.route("/api/sunlight/status")
 def api_sunlight_status():
     with _sim_lock:
@@ -534,6 +626,7 @@ def api_sunlight_status():
         last_seen = _device_last_seen
         control_mode = _control_mode
         override_until = _manual_override_until
+        nap_brightness = _nap_brightness
         cfg = _sim_config
     result = {
         "running": running,
@@ -541,6 +634,11 @@ def api_sunlight_status():
         "device_online": online,
         "control_mode": control_mode if running else "stopped",
         "manual_override_until": override_until,
+        "nap": ({
+            "until": override_until,
+            "brightness": nap_brightness,
+            "rgb": list(_NAP_RGB),
+        } if control_mode == "nap" and override_until is not None else None),
         "device_last_seen": last_seen,
     }
     if state:
@@ -560,7 +658,7 @@ def api_sunlight_status():
 @app.route("/api/sunlight/start", methods=["POST"])
 def api_sunlight_start():
     global _sim_thread, _sim_config, _sim_running, _sim_demo, _sim_generation, _sim_file_lock
-    global _control_mode, _manual_override_until
+    global _control_mode, _manual_override_until, _nap_brightness
 
     with _sim_lock:
         if _sim_running:
@@ -602,6 +700,7 @@ def api_sunlight_start():
         _sim_demo = demo
         _control_mode = "automation"
         _manual_override_until = None
+        _nap_brightness = None
         _sim_generation += 1
         gen = _sim_generation
 
@@ -614,12 +713,13 @@ def api_sunlight_start():
 
 @app.route("/api/sunlight/stop", methods=["POST"])
 def api_sunlight_stop():
-    global _sim_running, _sim_demo, _control_mode, _manual_override_until
+    global _sim_running, _sim_demo, _control_mode, _manual_override_until, _nap_brightness
     with _sim_lock:
         _sim_running = False
         _sim_demo = False
         _control_mode = "stopped"
         _manual_override_until = None
+        _nap_brightness = None
     # Lock is released in _run_sim_loop when it exits
     _log("Stop requested")
     return jsonify({"status": "stopped"})
@@ -628,12 +728,13 @@ def api_sunlight_stop():
 @app.route("/api/sunlight/resume", methods=["POST"])
 def api_sunlight_resume():
     """End a manual override and force automation to reconcile next cycle."""
-    global _control_mode, _manual_override_until, _device_online
+    global _control_mode, _manual_override_until, _nap_brightness, _device_online
     with _sim_lock:
         if not _sim_running:
             return jsonify({"status": "error", "error": "Simulator is not running"}), 409
         _control_mode = "automation"
         _manual_override_until = None
+        _nap_brightness = None
         _device_online = False
     _log("Manual override ended; automation resume requested")
     return jsonify({"status": "resuming"})
@@ -777,6 +878,23 @@ _HTML = """\
   .status-pill strong { color: var(--text); }
   .offline { color: var(--red) !important; border-color: var(--red) !important; }
   .override { color: #ffd080 !important; border-color: #bd8640 !important; }
+  .nap-panel {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 14px; margin-bottom: 16px; padding: 14px;
+    border: 1px solid #8f6337; border-radius: 12px;
+    background: linear-gradient(135deg, rgba(255,106,0,.12), rgba(255,208,128,.035));
+  }
+  .nap-copy { display: grid; gap: 3px; min-width: 220px; flex: 1; }
+  .nap-copy strong { color: #ffd080; }
+  .nap-copy span { color: var(--text2); font-size: .82em; }
+  .nap-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+  .nap-field { display: grid; gap: 3px; }
+  .nap-field label { color: var(--text2); font-size: .72em; }
+  .nap-field input {
+    width: 78px; min-height: 44px; padding: 7px 8px;
+    color: var(--text); background: var(--accent);
+    border: 1px solid var(--border); border-radius: 8px;
+  }
   .card h2 {
     font-size: 0.85em;
     text-transform: uppercase;
@@ -1040,6 +1158,10 @@ _HTML = """\
     .sim-hero { grid-template-columns: 1fr; gap: 14px; }
     .house-scene { min-height: 0; }
     .scene-title { font-size: 1.3em; }
+    .nap-panel, .nap-controls { align-items: stretch; }
+    .nap-controls { width: 100%; }
+    .nap-field { flex: 1; }
+    .nap-field input { width: 100%; }
   }
 </style>
 </head>
@@ -1145,6 +1267,24 @@ _HTML = """\
       <span class="status-pill" id="deviceStatus"><strong>Device</strong> Checking</span>
       <span class="status-pill" id="controlStatus"><strong>Control</strong> Checking</span>
       <span class="status-pill" id="weatherStatus"><strong>Weather</strong> Checking</span>
+    </div>
+    <div class="nap-panel" aria-live="polite">
+      <div class="nap-copy">
+        <strong>Nap Mode</strong>
+        <span id="napStatus">Dim warm amber light for a timed rest, then resume daylight.</span>
+      </div>
+      <div class="nap-controls">
+        <div class="nap-field">
+          <label for="napMinutes">Minutes</label>
+          <input type="number" id="napMinutes" value="40" min="5" max="180">
+        </div>
+        <div class="nap-field">
+          <label for="napBrightness">Brightness %</label>
+          <input type="number" id="napBrightness" value="5" min="1" max="20">
+        </div>
+        <button class="primary" id="napStartBtn" onclick="startNap()">Start nap</button>
+        <button id="napStopBtn" onclick="stopNap()" style="display:none">End nap</button>
+      </div>
     </div>
     <div class="sim-status">
       <span class="dot" id="simDot"></span>
@@ -1403,6 +1543,22 @@ async function resumeSim() {
   pollSim();
 }
 
+async function startNap() {
+  const minutes = parseInt(document.getElementById('napMinutes').value);
+  const brightness = parseInt(document.getElementById('napBrightness').value);
+  const d = await post('/api/nap/start', {minutes, brightness});
+  const until = new Date(d.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  toast('Nap Mode active until ' + until);
+  pollSim();
+  setTimeout(refresh, 500);
+}
+
+async function stopNap() {
+  await post('/api/nap/stop', {});
+  toast('Nap ended; daylight automation resuming');
+  pollSim();
+}
+
 function stateColor(s) {
   if (!s) return '#333';
   if (s.mode === 'color' && s.rgb) {
@@ -1471,6 +1627,14 @@ function updateHouseScene(d) {
     windowEl.style.opacity = .35;
   }
 
+  if (d.control_mode === 'nap' && d.nap) {
+    const until = new Date(d.nap.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    document.getElementById('sceneTitle').textContent = 'Nap Mode at ' + d.nap.brightness + '%';
+    document.getElementById('sceneLight').textContent = 'Warm amber · resumes at ' + until;
+    windowEl.style.fill = 'rgb(' + d.nap.rgb.join(',') + ')';
+    windowEl.style.opacity = Math.max(.18, d.nap.brightness / 100);
+  }
+
   graphic.setAttribute('aria-label',
     'House at ' + document.getElementById('sceneLocation').textContent + ', ' +
     facing + '-facing window, weather ' + weather +
@@ -1492,20 +1656,36 @@ async function pollSim() {
     const deviceStatus = document.getElementById('deviceStatus');
     const controlStatus = document.getElementById('controlStatus');
     const weatherStatus = document.getElementById('weatherStatus');
+    const napStatus = document.getElementById('napStatus');
+    const napStartBtn = document.getElementById('napStartBtn');
+    const napStopBtn = document.getElementById('napStopBtn');
 
     updateHouseScene(d);
 
     deviceStatus.className = 'status-pill' + (d.device_online ? '' : ' offline');
     deviceStatus.innerHTML = '<strong>Device</strong> ' + (d.device_online ? 'Online' : 'Offline');
-    const overriding = d.control_mode === 'manual_override';
+    const manualOverride = d.control_mode === 'manual_override';
+    const napping = d.control_mode === 'nap' && d.nap;
+    const overriding = manualOverride || napping;
     controlStatus.className = 'status-pill' + (overriding ? ' override' : '');
-    if (overriding && d.manual_override_until) {
+    if (napping) {
+      const until = new Date(d.nap.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+      controlStatus.innerHTML = '<strong>Control</strong> Nap until ' + until;
+      napStatus.textContent = d.nap.brightness + '% warm amber · daylight resumes at ' + until;
+    } else if (manualOverride && d.manual_override_until) {
       const until = new Date(d.manual_override_until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
       controlStatus.innerHTML = '<strong>Control</strong> Manual until ' + until;
+      napStatus.textContent = 'Dim warm amber light for a timed rest, then resume daylight.';
     } else {
       controlStatus.innerHTML = '<strong>Control</strong> ' + (d.running ? 'Automation' : 'Stopped');
+      napStatus.textContent = d.running
+        ? 'Dim warm amber light for a timed rest, then resume daylight.'
+        : 'Start sunlight automation before using Nap Mode.';
     }
-    resumeBtn.style.display = overriding ? '' : 'none';
+    resumeBtn.style.display = manualOverride ? '' : 'none';
+    napStartBtn.style.display = napping ? 'none' : '';
+    napStartBtn.disabled = !d.running;
+    napStopBtn.style.display = napping ? '' : 'none';
 
     const age = d.state && d.state.weather_age_seconds;
     if (d.state && d.state.weather) {
@@ -1520,13 +1700,20 @@ async function pollSim() {
 
     if (d.running) {
       dot.classList.toggle('running', d.device_online && !overriding);
-      label.textContent = !d.device_online ? 'Device offline' : (overriding ? 'Manual override' : (d.demo ? 'Demo' : 'Running'));
+      label.textContent = !d.device_online ? 'Device offline' :
+        (napping ? 'Nap mode' : (manualOverride ? 'Manual override' : (d.demo ? 'Demo' : 'Running')));
       startBtn.style.display = 'none';
       demoBtn.style.display = 'none';
       stopBtn.style.display = '';
       form.style.display = 'none';
 
-      if (d.state) {
+      if (napping) {
+        const until = new Date(d.nap.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+        detail.innerHTML = '<strong>nap mode</strong> &middot; warm amber &middot; ' +
+          d.nap.brightness + '% &middot; until ' + until;
+        preview.style.background = 'rgb(' + d.nap.rgb.join(',') + ')';
+        preview.style.opacity = Math.max(.15, d.nap.brightness / 100);
+      } else if (d.state) {
         const s = d.state;
         let val = '';
         if (s.mode === 'color' && s.rgb) val = 'RGB(' + s.rgb.join(', ') + ')';
@@ -1551,6 +1738,8 @@ async function pollSim() {
       demoBtn.style.display = '';
       stopBtn.style.display = 'none';
       resumeBtn.style.display = 'none';
+      napStartBtn.disabled = true;
+      napStopBtn.style.display = 'none';
       form.style.display = '';
       detail.innerHTML = '';
       preview.style.background = '#333';
@@ -1627,7 +1816,7 @@ async function refreshLog() {
 def _auto_start_simulator() -> None:
     """Start the sunlight simulator automatically on launch."""
     global _sim_thread, _sim_config, _sim_running, _sim_generation, _sim_file_lock
-    global _control_mode, _manual_override_until
+    global _control_mode, _manual_override_until, _nap_brightness
 
     with _sim_lock:
         if _sim_running:
@@ -1656,6 +1845,7 @@ def _auto_start_simulator() -> None:
         _sim_running = True
         _control_mode = "automation"
         _manual_override_until = None
+        _nap_brightness = None
         _sim_generation += 1
         gen = _sim_generation
 

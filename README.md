@@ -39,6 +39,8 @@ views. Published screenshots use sanitized example values.
 - Applies smooth, one-minute transitions to the Nanoleaf device.
 - Automatically resumes the correct state after a device disconnect.
 - Pauses automation for one hour when a person makes a direct dashboard change.
+- Provides a 40-minute Nap Mode that uses dim warm-amber light and then resumes
+  the current daylight state automatically.
 - Prevents two simulator processes on the same host from controlling the lights.
 - Exposes a responsive LAN dashboard with a live house, location, orientation,
   weather, and simulated-light visualization.

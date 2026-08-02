@@ -49,6 +49,7 @@ Representative response:
   "device_online": true,
   "control_mode": "automation",
   "manual_override_until": null,
+  "nap": null,
   "device_last_seen": 1785100301.17,
   "config": {
     "latitude": 34.13,
@@ -133,6 +134,34 @@ exactly. Unknown effects return HTTP 404.
 
 All successful direct-control routes start a one-hour manual override when the
 simulator is running.
+
+## Nap Mode
+
+### `POST /api/nap/start`
+
+Both fields are optional:
+
+```json
+{"minutes":40,"brightness":5}
+```
+
+Duration is clamped to 5-180 minutes and brightness to 1-20%. The route applies
+a warm amber RGB scene, pauses daylight writes, and returns the scheduled Unix
+end time:
+
+```json
+{"status":"nap started","minutes":40,"brightness":5,"until":1785102701.17}
+```
+
+`GET /api/sunlight/status` reports `control_mode: "nap"` and a `nap` object
+containing `until`, `brightness`, and `rgb` while active. Returns HTTP 409 when
+sunlight automation is stopped and HTTP 502 if the device cannot be reached.
+
+### `POST /api/nap/stop`
+
+No body is required. Ends Nap Mode early and forces the current daylight state
+to be reapplied. If Nap Mode is not active, returns
+`{"status":"not active"}` without changing the current control mode.
 
 ## Automation control
 

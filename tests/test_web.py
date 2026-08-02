@@ -127,6 +127,7 @@ def test_direct_control_starts_override_and_resume_clears_it(monkeypatch):
     monkeypatch.setattr(web, "_sim_running", True)
     monkeypatch.setattr(web, "_control_mode", "automation")
     monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_nap_brightness", None)
     monkeypatch.setattr(web, "_device_online", True)
     monkeypatch.setattr(web, "_get_nl", lambda: object())
     monkeypatch.setattr(web, "_device_put", lambda *_: None)
@@ -141,7 +142,78 @@ def test_direct_control_starts_override_and_resume_clears_it(monkeypatch):
     assert resumed.status_code == 200
     assert web._control_mode == "automation"
     assert web._manual_override_until is None
+    assert web._nap_brightness is None
     assert web._device_online is False
+
+
+def test_nap_mode_applies_amber_scene_and_reports_status(monkeypatch):
+    applied = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "automation")
+    monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr(
+        web.sunlight,
+        "apply_light",
+        lambda nl, state, transition: applied.append((nl, state, transition)),
+    )
+
+    client = web.app.test_client()
+    response = client.post("/api/nap/start", json={"minutes": 40, "brightness": 5})
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "nap started", "minutes": 40, "brightness": 5, "until": 3_400.0,
+    }
+    assert applied[0][1] == {"mode": "color", "rgb": (255, 106, 0), "brightness": 5}
+    assert applied[0][2] == 5
+    assert web._control_mode == "nap"
+    status = client.get("/api/sunlight/status").get_json()
+    assert status["nap"] == {
+        "until": 3_400.0, "brightness": 5, "rgb": [255, 106, 0],
+    }
+
+
+def test_nap_mode_requires_running_automation(monkeypatch):
+    monkeypatch.setattr(web, "_sim_running", False)
+
+    response = web.app.test_client().post("/api/nap/start", json={})
+
+    assert response.status_code == 409
+    assert "must be running" in response.get_json()["error"]
+
+
+def test_nap_mode_can_end_early(monkeypatch):
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "nap")
+    monkeypatch.setattr(web, "_manual_override_until", 3_400.0)
+    monkeypatch.setattr(web, "_nap_brightness", 5)
+    monkeypatch.setattr(web, "_device_online", True)
+
+    response = web.app.test_client().post("/api/nap/stop", json={})
+
+    assert response.status_code == 200
+    assert web._control_mode == "automation"
+    assert web._manual_override_until is None
+    assert web._nap_brightness is None
+    assert web._device_online is False
+
+
+def test_nap_mode_expiry_resumes_automation(monkeypatch):
+    messages = []
+    monkeypatch.setattr(web, "_control_mode", "nap")
+    monkeypatch.setattr(web, "_manual_override_until", 3_400.0)
+    monkeypatch.setattr(web, "_nap_brightness", 5)
+    monkeypatch.setattr(web, "_log", messages.append)
+
+    assert web._timed_override_active(now=3_400.0) is False
+    assert web._control_mode == "automation"
+    assert web._manual_override_until is None
+    assert web._nap_brightness is None
+    assert messages == ["Nap mode complete; resuming automation"]
 
 
 def test_manual_override_pauses_demo_without_applying(monkeypatch):
@@ -216,3 +288,6 @@ def test_dashboard_includes_branding_and_dynamic_house_scene():
     assert 'id="sceneLocation"' in html
     assert 'id="sceneOrientation"' in html
     assert 'id="sceneWeather"' in html
+    assert 'id="napMinutes"' in html
+    assert 'id="napBrightness"' in html
+    assert 'id="napStartBtn"' in html

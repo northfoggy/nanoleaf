@@ -39,7 +39,7 @@ is reached over HTTPS. The dashboard listens on port 5000 by default.
 | `nanoleaf_ctl/config.py` | Atomic credential persistence and exclusive simulator lock |
 | `nanoleaf_ctl/sunlight.py` | Solar model, window orientation, weather modulation, and device application |
 | `nanoleaf_ctl/weather.py` | Open-Meteo lookup and ten-minute weather cache |
-| `nanoleaf_ctl/web.py` | Flask API, embedded dashboard, automation lifecycle, manual override, health, and logs |
+| `nanoleaf_ctl/web.py` | Flask API, embedded dashboard, automation lifecycle, timed overrides, health, and logs |
 | `nanoleaf.service` | Hardened systemd service for the Raspberry Pi deployment |
 
 ## Startup sequence
@@ -118,7 +118,7 @@ The web process maintains these important states under `_sim_lock`:
 - normal/demo mode;
 - current computed state and configuration;
 - device online/offline and last-seen time;
-- automation/manual-override/stopped control mode;
+- automation/manual-override/nap/stopped control mode;
 - generation number for superseding old threads;
 - process-level lock handle.
 
@@ -130,10 +130,13 @@ stateDiagram-v2
     WebOnly --> Automation: later start succeeds
     Automation --> ManualOverride: direct dashboard change
     ManualOverride --> Automation: one hour expires or Resume is selected
+    Automation --> Nap: Start nap
+    Nap --> Automation: timer expires or End nap is selected
     Automation --> DeviceOffline: device request fails
     DeviceOffline --> Automation: reconnect and state reapply
     Automation --> Stopped: Stop selected
     ManualOverride --> Stopped: Stop selected
+    Nap --> Stopped: Stop selected
     Stopped --> Automation: Start selected
 ```
 
@@ -141,6 +144,12 @@ Direct dashboard changes to power, brightness, color, color temperature, or an
 effect start a one-hour manual override. The automation thread keeps computing
 state but does not overwrite the person's choice. Resume ends the override and
 forces reconciliation on the next cycle.
+
+Nap Mode is a second timed override with a narrower purpose. It atomically
+applies a low-brightness warm-amber color scene, records the scheduled end, and
+prevents normal simulator writes until that time. The automation loop checks
+the timer once per second and invalidates its last-applied state when the nap
+ends, forcing prompt reconciliation with the current daylight calculation.
 
 ## Concurrency and duplicate prevention
 
