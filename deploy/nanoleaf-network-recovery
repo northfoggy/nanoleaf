@@ -4,7 +4,7 @@ set -eu
 interface="${NANOLEAF_NETWORK_INTERFACE:-wlan0}"
 reconnect_threshold="${NANOLEAF_RECONNECT_THRESHOLD:-3}"
 reboot_threshold="${NANOLEAF_REBOOT_THRESHOLD:-8}"
-reboot_cooldown="${NANOLEAF_REBOOT_COOLDOWN_SECONDS:-21600}"
+reboot_cooldown="${NANOLEAF_REBOOT_COOLDOWN_SECONDS:-1800}"
 runtime_dir="${RUNTIME_DIRECTORY:-/run/nanoleaf-network-recovery}"
 state_dir="${STATE_DIRECTORY:-/var/lib/nanoleaf-network-recovery}"
 count_file="${runtime_dir}/failures"
@@ -30,9 +30,45 @@ gateway_neighbor_is_usable() {
     gateway="$1"
     state="$(ip neigh show to "$gateway" dev "$interface" 2>/dev/null | awk 'NR == 1 { print $NF }')"
     case "$state" in
-        REACHABLE|STALE|DELAY|PROBE|PERMANENT|NOARP) return 0 ;;
+        REACHABLE|PERMANENT|NOARP) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+active_connection() {
+    connection="$(nmcli -g GENERAL.CONNECTION device show "$interface" 2>/dev/null || true)"
+    case "$connection" in
+        ''|'--') return 1 ;;
+        *) printf '%s\n' "$connection" ;;
+    esac
+}
+
+log_link_details() {
+    connection="$(active_connection 2>/dev/null || true)"
+    access_point="$(
+        nmcli -t -f IN-USE,BSSID,SIGNAL device wifi list \
+            ifname "$interface" --rescan no 2>/dev/null \
+            | awk 'substr($0, 1, 2) == "*:" { print; exit }'
+    )"
+    log_event "link details: connection=${connection:-unknown}; access-point=${access_point:-unknown}"
+}
+
+reconnect_saved_connection() {
+    connection="$(active_connection 2>/dev/null || true)"
+    log_link_details
+    log_event "cycling ${interface} through NetworkManager"
+    nmcli device disconnect "$interface" >/dev/null 2>&1 || true
+    sleep 3
+
+    if [ -n "$connection" ]; then
+        if ! nmcli connection up "$connection" ifname "$interface" >/dev/null 2>&1; then
+            log_event "saved connection activation failed: ${connection}"
+        fi
+    else
+        log_event "active connection unknown; using device fallback"
+        nmcli device connect "$interface" >/dev/null 2>&1 || true
+    fi
+    sleep 12
 }
 
 network_is_healthy() {
@@ -83,12 +119,10 @@ failures=$((failures + 1))
 write_count "$failures"
 log_event "gateway unreachable on ${interface}; consecutive failure ${failures}"
 
-if [ "$failures" -eq "$reconnect_threshold" ]; then
-    log_event "cycling ${interface} through NetworkManager"
-    nmcli device disconnect "$interface" >/dev/null 2>&1 || true
-    sleep 3
-    nmcli device connect "$interface" >/dev/null 2>&1 || true
-    sleep 12
+second_reconnect_threshold=$((reboot_threshold - 2))
+if [ "$failures" -eq "$reconnect_threshold" ] \
+        || [ "$failures" -eq "$second_reconnect_threshold" ]; then
+    reconnect_saved_connection
     if network_is_healthy; then
         write_count 0
         log_event "gateway connectivity recovered after NetworkManager reconnect"

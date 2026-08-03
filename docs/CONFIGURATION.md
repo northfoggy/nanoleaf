@@ -96,10 +96,10 @@ auto-start.
 
 The web command binds the server and announces systemd readiness before device
 connection. It then starts automation in a background worker with the default
-location, orientation, peak, and a `-5` brightness bias.
-
-If device connection fails, the dashboard can remain available. A later Start
-request retries connection. Only one simulator may hold the local lock.
+location, orientation, peak, and a `-5` brightness bias. If the light is still
+booting or temporarily unreachable, the worker retries with delays that grow
+from five seconds to a maximum of one minute. A manual Start or Stop request
+cancels the startup retry worker. Only one simulator may hold the local lock.
 
 ## Manual override
 

@@ -109,12 +109,19 @@ sudo journalctl -u nanoleaf-network-recovery.service --since today --no-pager
 ```
 
 The timer requires a default route and connected NetworkManager link, then
-accepts either an ICMP response or a usable kernel neighbour entry from the
-gateway. This avoids treating an ICMP-filtering router as offline. It does not
+accepts either an ICMP response or a freshly reachable kernel neighbour entry
+from the gateway. Stale or probing neighbour entries are not proof of working
+LAN routing. Recovery reactivates the named saved NetworkManager profile so a
+mesh reconnect does not depend on interactive credential lookup. It does not
 use Nanoleaf reachability as a reboot condition. A manual test of the service is
 safe only while the gateway is reachable; otherwise it increments the real
 recovery counter. The counter persists between timer invocations in `/run` and
 resets naturally when the Pi boots.
+
+Recovery logs include the current profile, BSSID, and signal when a reconnect
+is attempted. On a mesh, repeated authentication failures against a preferred
+node can indicate that node binding is preventing a healthy roam. Remove the
+binding or pin the Pi to a verified node; Ethernet is preferable for the server.
 
 ## Verify a single server
 
