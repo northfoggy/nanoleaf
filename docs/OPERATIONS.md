@@ -110,8 +110,9 @@ sudo journalctl -u nanoleaf-network-recovery.service --since today --no-pager
 
 The timer requires a default route and connected NetworkManager link, then
 accepts either an ICMP response or a freshly reachable kernel neighbour entry
-from the gateway. Stale or probing neighbour entries are not proof of working
-LAN routing. Recovery reactivates the named saved NetworkManager profile so a
+from the gateway. Transitional neighbour states receive a short, bounded wait
+for ARP confirmation; a state that remains stale or probing is not proof of
+working LAN routing. Recovery reactivates the named saved NetworkManager profile so a
 mesh reconnect does not depend on interactive credential lookup. It does not
 use Nanoleaf reachability as a reboot condition. A manual test of the service is
 safe only while the gateway is reachable; otherwise it increments the real

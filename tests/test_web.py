@@ -133,6 +133,30 @@ def test_auto_start_retry_can_be_canceled(monkeypatch):
     assert acquired == []
 
 
+def test_auto_start_rechecks_cancellation_after_connection(monkeypatch):
+    cancel = threading.Event()
+    acquired = []
+
+    def connect_then_cancel():
+        cancel.set()
+        return object()
+
+    monkeypatch.setattr(web, "_sim_running", False)
+    monkeypatch.setattr(web, "_auto_start_cancel", cancel)
+    monkeypatch.setattr(web, "_get_nl", connect_then_cancel)
+    monkeypatch.setattr(web, "_setup_file_logging", lambda: None)
+    monkeypatch.setattr(web._file_logger, "info", lambda *args: None)
+    monkeypatch.setattr(web.WeatherCache, "__init__", lambda self, *args: None)
+    monkeypatch.setattr(
+        web.config, "acquire_sunlight_lock", lambda: acquired.append(True),
+    )
+
+    web._auto_start_simulator()
+
+    assert acquired == []
+    assert web._sim_running is False
+
+
 def test_redact_removes_token_from_urls_and_messages():
     secret = "this-is-the-device-secret"
     text = (

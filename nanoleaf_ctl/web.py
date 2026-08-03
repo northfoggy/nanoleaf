@@ -718,8 +718,8 @@ def api_sunlight_start():
     global _sim_thread, _sim_config, _sim_running, _sim_demo, _sim_generation, _sim_file_lock
     global _control_mode, _manual_override_until, _nap_brightness
 
-    _auto_start_cancel.set()
     with _sim_lock:
+        _auto_start_cancel.set()
         if _sim_running:
             _log("Start requested but already running")
             return jsonify({"status": "already running"})
@@ -773,8 +773,8 @@ def api_sunlight_start():
 @app.route("/api/sunlight/stop", methods=["POST"])
 def api_sunlight_stop():
     global _sim_running, _sim_demo, _control_mode, _manual_override_until, _nap_brightness
-    _auto_start_cancel.set()
     with _sim_lock:
+        _auto_start_cancel.set()
         _sim_running = False
         _sim_demo = False
         _control_mode = "stopped"
@@ -1891,6 +1891,10 @@ def _auto_start_simulator() -> None:
         attempt += 1
         try:
             nl = _get_nl()
+            if _auto_start_cancel.is_set():
+                _setup_file_logging()
+                _file_logger.info("Auto-start canceled after device connection")
+                return
             break
         except Exception as exc:
             _setup_file_logging()
@@ -1907,7 +1911,7 @@ def _auto_start_simulator() -> None:
         return
 
     with _sim_lock:
-        if _sim_running:
+        if _auto_start_cancel.is_set() or _sim_running:
             return
 
         _sim_file_lock = config.acquire_sunlight_lock()

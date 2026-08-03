@@ -5,6 +5,7 @@ interface="${NANOLEAF_NETWORK_INTERFACE:-wlan0}"
 reconnect_threshold="${NANOLEAF_RECONNECT_THRESHOLD:-3}"
 reboot_threshold="${NANOLEAF_REBOOT_THRESHOLD:-8}"
 reboot_cooldown="${NANOLEAF_REBOOT_COOLDOWN_SECONDS:-1800}"
+neighbor_settle_seconds="${NANOLEAF_NEIGHBOR_SETTLE_SECONDS:-5}"
 runtime_dir="${RUNTIME_DIRECTORY:-/run/nanoleaf-network-recovery}"
 state_dir="${STATE_DIRECTORY:-/var/lib/nanoleaf-network-recovery}"
 count_file="${runtime_dir}/failures"
@@ -29,6 +30,14 @@ link_is_connected() {
 gateway_neighbor_is_usable() {
     gateway="$1"
     state="$(ip neigh show to "$gateway" dev "$interface" 2>/dev/null | awk 'NR == 1 { print $NF }')"
+    case "$state" in
+        STALE|DELAY|PROBE)
+            # A failed ping can start delayed ARP confirmation. Give the kernel
+            # time to probe before deciding that local routing is broken.
+            sleep "$neighbor_settle_seconds"
+            state="$(ip neigh show to "$gateway" dev "$interface" 2>/dev/null | awk 'NR == 1 { print $NF }')"
+            ;;
+    esac
     case "$state" in
         REACHABLE|PERMANENT|NOARP) return 0 ;;
         *) return 1 ;;

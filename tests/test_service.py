@@ -59,6 +59,9 @@ def test_network_recovery_is_gateway_scoped_and_guarded():
     assert 'reconnect_threshold="${NANOLEAF_RECONNECT_THRESHOLD:-3}"' in script
     assert 'reboot_threshold="${NANOLEAF_REBOOT_THRESHOLD:-8}"' in script
     assert 'reboot_cooldown="${NANOLEAF_REBOOT_COOLDOWN_SECONDS:-1800}"' in script
+    assert 'neighbor_settle_seconds="${NANOLEAF_NEIGHBOR_SETTLE_SECONDS:-5}"' in script
+    assert "STALE|DELAY|PROBE" in script
+    assert 'sleep "$neighbor_settle_seconds"' in script
     assert 'nmcli connection up "$connection" ifname "$interface"' in script
     assert 'second_reconnect_threshold=$((reboot_threshold - 2))' in script
     assert "systemctl reboot" in script
@@ -131,6 +134,75 @@ fi
     assert result.returncode == 0, result.stderr
     assert (runtime_dir / "failures").read_text(encoding="utf-8") == "0\n"
     assert not action_log.exists(), "healthy link must not reconnect or reboot"
+
+
+def test_network_recovery_waits_for_delayed_neighbor_probe(tmp_path):
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("POSIX shell is unavailable")
+
+    root = Path(__file__).parents[1]
+    script = root / "deploy" / "nanoleaf-network-recovery"
+    fake_bin = tmp_path / "bin"
+    runtime_dir = tmp_path / "run"
+    state_dir = tmp_path / "state"
+    action_log = tmp_path / "actions"
+    neighbor_count = tmp_path / "neighbor-count"
+    fake_bin.mkdir()
+    runtime_dir.mkdir()
+    state_dir.mkdir()
+
+    commands = {
+        "ip": """#!/bin/sh
+case "$1" in
+    -4) printf '%s\n' 'default via 192.0.2.1 dev wlan0' ;;
+    neigh)
+        count="$(cat "$NEIGH_COUNT_FILE" 2>/dev/null || printf '0')"
+        count=$((count + 1))
+        printf '%s\n' "$count" >"$NEIGH_COUNT_FILE"
+        if [ "$count" -eq 1 ]; then state=DELAY; else state=REACHABLE; fi
+        printf '%s\n' "192.0.2.1 dev wlan0 lladdr 00:11:22:33:44:55 $state"
+        ;;
+esac
+""",
+        "nmcli": """#!/bin/sh
+if [ "$1" = "-g" ]; then
+    printf '%s\n' '100 (connected)'
+else
+    printf '%s\n' "$*" >>"$ACTION_LOG"
+fi
+""",
+        "ping": "#!/bin/sh\nexit 1\n",
+        "logger": "#!/bin/sh\nexit 0\n",
+        "sleep": "#!/bin/sh\nprintf '%s\n' \"$*\" >>\"$SLEEP_LOG\"\n",
+        "sync": "#!/bin/sh\nexit 0\n",
+        "systemctl": "#!/bin/sh\nprintf '%s\n' \"$*\" >>\"$ACTION_LOG\"\n",
+    }
+    for name, body in commands.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8", newline="\n")
+        command.chmod(0o755)
+
+    sleep_log = tmp_path / "sleeps"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "RUNTIME_DIRECTORY": str(runtime_dir),
+            "STATE_DIRECTORY": str(state_dir),
+            "ACTION_LOG": str(action_log),
+            "SLEEP_LOG": str(sleep_log),
+            "NEIGH_COUNT_FILE": str(neighbor_count),
+        }
+    )
+    result = subprocess.run(
+        [shell, str(script)], check=False, capture_output=True, text=True, env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert sleep_log.read_text(encoding="utf-8") == "5\n"
+    assert (runtime_dir / "failures").read_text(encoding="utf-8") == "0\n"
+    assert not action_log.exists(), "settled neighbor must not reconnect or reboot"
 
 
 def test_network_recovery_reactivates_saved_profile_for_stale_gateway(tmp_path):
