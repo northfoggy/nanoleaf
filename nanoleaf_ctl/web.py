@@ -267,14 +267,29 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
 
         state_key = (state["mode"], state.get("rgb"), state.get("color_temp"), state["brightness"])
 
-        # Conflict detection: read back device brightness and compare to what we last set
+        # Conflict detection: power is separate from brightness in the
+        # Nanoleaf API. An external controller can therefore turn the device
+        # off while it still reports the brightness we last applied. Treat a
+        # power mismatch as a stale cached target so automation reasserts the
+        # complete scene instead of skipping it indefinitely.
         if not demo and last_applied_brightness is not None and _device_online:
             try:
-                actual_br = _device_get(nl, "/state/brightness").get("value", 0)
+                actual_on = bool(_device_get(nl, "/state/on").get("value", False))
+                expected_on = state["mode"] != "off" and state["brightness"] > 0
                 with _sim_lock:
                     _device_last_seen = time.time()
-                if abs(actual_br - last_applied_brightness) > 3:
-                    _log(f"CONFLICT: device brightness is {actual_br}% but we last set {last_applied_brightness}% — another controller is likely active!")
+                if actual_on != expected_on:
+                    _log(
+                        f"CONFLICT: device power is {'on' if actual_on else 'off'} "
+                        f"but automation expects {'on' if expected_on else 'off'} "
+                        "— reapplying target"
+                    )
+                    last_state_key = None
+                    last_applied_brightness = None
+                else:
+                    actual_br = _device_get(nl, "/state/brightness").get("value", 0)
+                    if abs(actual_br - last_applied_brightness) > 3:
+                        _log(f"CONFLICT: device brightness is {actual_br}% but we last set {last_applied_brightness}% — another controller is likely active!")
             except (_requests.RequestException, OSError, ValueError) as exc:
                 with _sim_lock:
                     _device_online = False
