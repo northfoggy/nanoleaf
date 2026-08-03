@@ -342,6 +342,61 @@ def test_expiry_reapplies_unchanged_automatic_target(monkeypatch):
     assert len(applied) == 2
 
 
+@pytest.mark.parametrize(
+    ("computed_state", "actual_on"),
+    [
+        ({
+            "phase": "daylight", "mode": "color_temp",
+            "color_temp": 5000, "brightness": 50,
+        }, False),
+        ({
+            "phase": "night", "mode": "off", "brightness": 0,
+        }, True),
+    ],
+)
+def test_external_power_change_reapplies_unchanged_automatic_target(
+    monkeypatch, computed_state, actual_on,
+):
+    applied = []
+    messages = []
+    device_reads = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_sim_generation", 37)
+    monkeypatch.setattr(web, "_control_mode", "automation")
+    monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(
+        web.sunlight, "compute_window_light", lambda *_: computed_state.copy(),
+    )
+
+    def read_device(_nl, path):
+        device_reads.append(path)
+        if path == "/state/on":
+            return {"value": actual_on}
+        return {"value": computed_state["brightness"]}
+
+    def apply_light(*_args, **_kwargs):
+        applied.append(True)
+        if len(applied) == 2:
+            monkeypatch.setattr(web, "_sim_running", False)
+
+    monkeypatch.setattr(web, "_device_get", read_device)
+    monkeypatch.setattr(web.sunlight, "apply_light", apply_light)
+    monkeypatch.setattr(web, "_log", messages.append)
+    monkeypatch.setattr(web.time, "sleep", lambda _seconds: None)
+
+    web._run_sim_loop_inner(
+        object(), web.sunlight.WindowConfig(), weather_cache=None,
+        my_generation=37, demo=False,
+    )
+
+    assert applied == [True, True]
+    assert device_reads == ["/state/on"]
+    assert any("device power" in message and "reapplying target" in message
+               for message in messages)
+
+
 def test_canceling_override_breaks_sleep_and_reapplies_immediately(monkeypatch):
     applied = []
     sleeps = []
