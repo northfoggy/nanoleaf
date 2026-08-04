@@ -57,6 +57,112 @@ def test_run_notifies_ready_only_after_server_is_bound(monkeypatch):
     ]
 
 
+def test_auto_start_retries_until_rebooting_device_is_available(monkeypatch):
+    probes = []
+    waits = []
+    threads = []
+    messages = []
+
+    class CancelEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, seconds):
+            waits.append(seconds)
+            return False
+
+    class Thread:
+        def __init__(self, **kwargs):
+            threads.append(kwargs)
+
+        def start(self):
+            threads[-1]["started"] = True
+
+    def probe(*_args):
+        probes.append(True)
+        if len(probes) < 3:
+            raise ConnectionError("device still booting")
+        return {"value": True}
+
+    monkeypatch.setattr(web, "_sim_running", False)
+    monkeypatch.setattr(web, "_sim_generation", 0)
+    monkeypatch.setattr(web, "_auto_start_cancel", CancelEvent())
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web, "_device_get", probe)
+    monkeypatch.setattr(web, "_setup_file_logging", lambda: None)
+    monkeypatch.setattr(web._file_logger, "warning", lambda *args: messages.append(args))
+    monkeypatch.setattr(web._file_logger, "info", lambda *args: messages.append(args))
+    monkeypatch.setattr(web.WeatherCache, "__init__", lambda self, *args: None)
+    monkeypatch.setattr(web.config, "acquire_sunlight_lock", lambda: object())
+    monkeypatch.setattr(web.threading, "Thread", Thread)
+
+    web._auto_start_simulator()
+
+    assert len(probes) == 3
+    assert waits == [5, 10]
+    assert web._sim_running is True
+    assert threads[0]["started"] is True
+    assert any("Auto-start attempt" in args[0] for args in messages)
+
+
+def test_auto_start_retry_can_be_canceled(monkeypatch):
+    acquired = []
+
+    class CancelEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _seconds):
+            return True
+
+    monkeypatch.setattr(web, "_sim_running", False)
+    monkeypatch.setattr(web, "_auto_start_cancel", CancelEvent())
+    monkeypatch.setattr(
+        web, "_get_nl",
+        lambda: (_ for _ in ()).throw(ConnectionError("offline")),
+    )
+    monkeypatch.setattr(web, "_setup_file_logging", lambda: None)
+    monkeypatch.setattr(web._file_logger, "warning", lambda *args: None)
+    monkeypatch.setattr(web._file_logger, "info", lambda *args: None)
+    monkeypatch.setattr(web.WeatherCache, "__init__", lambda self, *args: None)
+    monkeypatch.setattr(
+        web.config, "acquire_sunlight_lock", lambda: acquired.append(True),
+    )
+
+    web._auto_start_simulator()
+
+    assert acquired == []
+
+
+def test_auto_start_rechecks_cancellation_after_connection(monkeypatch):
+    cancel = threading.Event()
+    acquired = []
+
+    def connect_then_cancel():
+        cancel.set()
+        return object()
+
+    monkeypatch.setattr(web, "_sim_running", False)
+    monkeypatch.setattr(web, "_auto_start_cancel", cancel)
+    monkeypatch.setattr(web, "_get_nl", connect_then_cancel)
+    monkeypatch.setattr(
+        web, "_device_get", lambda *_args: (_ for _ in ()).throw(
+            AssertionError("canceled startup must not probe the device")
+        ),
+    )
+    monkeypatch.setattr(web, "_setup_file_logging", lambda: None)
+    monkeypatch.setattr(web._file_logger, "info", lambda *args: None)
+    monkeypatch.setattr(web.WeatherCache, "__init__", lambda self, *args: None)
+    monkeypatch.setattr(
+        web.config, "acquire_sunlight_lock", lambda: acquired.append(True),
+    )
+
+    web._auto_start_simulator()
+
+    assert acquired == []
+    assert web._sim_running is False
+
+
 def test_redact_removes_token_from_urls_and_messages():
     secret = "this-is-the-device-secret"
     text = (

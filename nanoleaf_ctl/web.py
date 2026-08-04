@@ -59,6 +59,7 @@ _nap_brightness: int | None = None
 _sim_log: deque = deque(maxlen=200)
 _watchdog_stop = threading.Event()
 _watchdog_thread: threading.Thread | None = None
+_auto_start_cancel = threading.Event()
 
 
 _file_logger = logging.getLogger("nanoleaf.sunlight")
@@ -69,6 +70,8 @@ _LOG_MAX_BYTES = 1_000_000
 _NAP_DEFAULT_MINUTES = 40
 _NAP_DEFAULT_BRIGHTNESS = 5
 _NAP_RGB = (255, 106, 0)
+_AUTO_START_INITIAL_DELAY = 5
+_AUTO_START_MAX_DELAY = 60
 
 
 def _scrub_existing_log(log_path: str) -> None:
@@ -716,6 +719,7 @@ def api_sunlight_start():
     global _control_mode, _manual_override_until, _nap_brightness
 
     with _sim_lock:
+        _auto_start_cancel.set()
         if _sim_running:
             _log("Start requested but already running")
             return jsonify({"status": "already running"})
@@ -770,6 +774,7 @@ def api_sunlight_start():
 def api_sunlight_stop():
     global _sim_running, _sim_demo, _control_mode, _manual_override_until, _nap_brightness
     with _sim_lock:
+        _auto_start_cancel.set()
         _sim_running = False
         _sim_demo = False
         _control_mode = "stopped"
@@ -1869,25 +1874,49 @@ async function refreshLog() {
 
 
 def _auto_start_simulator() -> None:
-    """Start the sunlight simulator automatically on launch."""
+    """Start automation when the device becomes reachable after boot."""
     global _sim_thread, _sim_config, _sim_running, _sim_generation, _sim_file_lock
     global _control_mode, _manual_override_until, _nap_brightness
 
-    with _sim_lock:
-        if _sim_running:
-            return
-
     cfg = sunlight.WindowConfig(brightness_bias=-5)
     weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
-    try:
-        nl = _get_nl()
-    except Exception as exc:
-        _setup_file_logging()
-        _file_logger.error("Auto-start: unable to connect to device: %s", exc)
+    attempt = 0
+    delay = _AUTO_START_INITIAL_DELAY
+
+    while not _auto_start_cancel.is_set():
+        with _sim_lock:
+            if _sim_running:
+                return
+
+        attempt += 1
+        try:
+            nl = _get_nl()
+            if _auto_start_cancel.is_set():
+                _setup_file_logging()
+                _file_logger.info("Auto-start canceled after device connection")
+                return
+            _device_get(nl, "/state/on")
+            if _auto_start_cancel.is_set():
+                _setup_file_logging()
+                _file_logger.info("Auto-start canceled after device probe")
+                return
+            break
+        except Exception as exc:
+            _setup_file_logging()
+            _file_logger.warning(
+                "Auto-start attempt %d: unable to connect to device: %s; "
+                "retrying in %ds",
+                attempt, exc, delay,
+            )
+            if _auto_start_cancel.wait(delay):
+                _file_logger.info("Auto-start canceled while waiting for device")
+                return
+            delay = min(delay * 2, _AUTO_START_MAX_DELAY)
+    else:
         return
 
     with _sim_lock:
-        if _sim_running:
+        if _auto_start_cancel.is_set() or _sim_running:
             return
 
         _sim_file_lock = config.acquire_sunlight_lock()
@@ -1909,7 +1938,9 @@ def _auto_start_simulator() -> None:
     )
     _sim_thread.start()
     _setup_file_logging()
-    _file_logger.info("Auto-started sunlight simulator (bias=-5)")
+    _file_logger.info(
+        "Auto-started sunlight simulator (bias=-5, attempt=%d)", attempt,
+    )
 
 
 def _watchdog_loop(interval: float) -> None:
@@ -1940,6 +1971,7 @@ def _start_watchdog() -> None:
 
 def _start_auto_start_worker() -> None:
     """Connect to the device without delaying web-service readiness."""
+    _auto_start_cancel.clear()
     threading.Thread(
         target=_auto_start_simulator,
         daemon=True,
@@ -1959,6 +1991,7 @@ def run(host: str = "0.0.0.0", port: int = 5000, ip: str | None = None):
     try:
         server.serve_forever()
     finally:
+        _auto_start_cancel.set()
         _watchdog_stop.set()
         _sd_notify("STOPPING=1")
         server.server_close()
