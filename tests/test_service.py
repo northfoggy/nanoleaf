@@ -62,7 +62,8 @@ def test_network_recovery_is_gateway_scoped_and_guarded():
     assert 'neighbor_settle_seconds="${NANOLEAF_NEIGHBOR_SETTLE_SECONDS:-5}"' in script
     assert "STALE|DELAY|PROBE" in script
     assert 'sleep "$neighbor_settle_seconds"' in script
-    assert 'nmcli connection up "$connection" ifname "$interface"' in script
+    assert 'nmcli -g GENERAL.CON-UUID device show "$interface"' in script
+    assert 'nmcli connection up uuid "$connection_uuid" ifname "$interface"' in script
     assert 'second_reconnect_threshold=$((reboot_threshold - 2))' in script
     assert "systemctl reboot" in script
 
@@ -232,7 +233,7 @@ esac
 if [ "$1" = "-g" ]; then
     case "$2" in
         GENERAL.STATE) printf '%s\n' '100 (connected)' ;;
-        GENERAL.CONNECTION) printf '%s\n' 'saved-mesh-profile' ;;
+        GENERAL.CON-UUID) printf '%s\n' '12345678-abcd-4321-abcd-123456789abc' ;;
     esac
 elif [ "$1" = "-t" ]; then
     printf '%s\n' '*:aa\\:bb\\:cc\\:dd\\:ee\\:ff:55'
@@ -267,7 +268,7 @@ fi
     assert result.returncode == 0, result.stderr
     actions = action_log.read_text(encoding="utf-8")
     assert "device disconnect wlan0" in actions
-    assert "connection up saved-mesh-profile ifname wlan0" in actions
+    assert "connection up uuid 12345678-abcd-4321-abcd-123456789abc ifname wlan0" in actions
     assert "device connect wlan0" not in actions
 
 

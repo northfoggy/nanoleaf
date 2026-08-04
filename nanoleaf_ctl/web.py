@@ -1895,6 +1895,11 @@ def _auto_start_simulator() -> None:
                 _setup_file_logging()
                 _file_logger.info("Auto-start canceled after device connection")
                 return
+            _device_get(nl, "/state/on")
+            if _auto_start_cancel.is_set():
+                _setup_file_logging()
+                _file_logger.info("Auto-start canceled after device probe")
+                return
             break
         except Exception as exc:
             _setup_file_logging()

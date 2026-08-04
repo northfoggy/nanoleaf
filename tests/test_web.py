@@ -58,7 +58,7 @@ def test_run_notifies_ready_only_after_server_is_bound(monkeypatch):
 
 
 def test_auto_start_retries_until_rebooting_device_is_available(monkeypatch):
-    attempts = []
+    probes = []
     waits = []
     threads = []
     messages = []
@@ -78,16 +78,17 @@ def test_auto_start_retries_until_rebooting_device_is_available(monkeypatch):
         def start(self):
             threads[-1]["started"] = True
 
-    def connect():
-        attempts.append(True)
-        if len(attempts) < 3:
+    def probe(*_args):
+        probes.append(True)
+        if len(probes) < 3:
             raise ConnectionError("device still booting")
-        return object()
+        return {"value": True}
 
     monkeypatch.setattr(web, "_sim_running", False)
     monkeypatch.setattr(web, "_sim_generation", 0)
     monkeypatch.setattr(web, "_auto_start_cancel", CancelEvent())
-    monkeypatch.setattr(web, "_get_nl", connect)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web, "_device_get", probe)
     monkeypatch.setattr(web, "_setup_file_logging", lambda: None)
     monkeypatch.setattr(web._file_logger, "warning", lambda *args: messages.append(args))
     monkeypatch.setattr(web._file_logger, "info", lambda *args: messages.append(args))
@@ -97,7 +98,7 @@ def test_auto_start_retries_until_rebooting_device_is_available(monkeypatch):
 
     web._auto_start_simulator()
 
-    assert len(attempts) == 3
+    assert len(probes) == 3
     assert waits == [5, 10]
     assert web._sim_running is True
     assert threads[0]["started"] is True
@@ -144,6 +145,11 @@ def test_auto_start_rechecks_cancellation_after_connection(monkeypatch):
     monkeypatch.setattr(web, "_sim_running", False)
     monkeypatch.setattr(web, "_auto_start_cancel", cancel)
     monkeypatch.setattr(web, "_get_nl", connect_then_cancel)
+    monkeypatch.setattr(
+        web, "_device_get", lambda *_args: (_ for _ in ()).throw(
+            AssertionError("canceled startup must not probe the device")
+        ),
+    )
     monkeypatch.setattr(web, "_setup_file_logging", lambda: None)
     monkeypatch.setattr(web._file_logger, "info", lambda *args: None)
     monkeypatch.setattr(web.WeatherCache, "__init__", lambda self, *args: None)

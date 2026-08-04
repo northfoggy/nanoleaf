@@ -44,34 +44,35 @@ gateway_neighbor_is_usable() {
     esac
 }
 
-active_connection() {
-    connection="$(nmcli -g GENERAL.CONNECTION device show "$interface" 2>/dev/null || true)"
-    case "$connection" in
+active_connection_uuid() {
+    connection_uuid="$(nmcli -g GENERAL.CON-UUID device show "$interface" 2>/dev/null || true)"
+    case "$connection_uuid" in
         ''|'--') return 1 ;;
-        *) printf '%s\n' "$connection" ;;
+        *) printf '%s\n' "$connection_uuid" ;;
     esac
 }
 
 log_link_details() {
-    connection="$(active_connection 2>/dev/null || true)"
+    connection_uuid="$(active_connection_uuid 2>/dev/null || true)"
+    connection_name="$(nmcli --escape no -g GENERAL.CONNECTION device show "$interface" 2>/dev/null || true)"
     access_point="$(
         nmcli -t -f IN-USE,BSSID,SIGNAL device wifi list \
             ifname "$interface" --rescan no 2>/dev/null \
             | awk 'substr($0, 1, 2) == "*:" { print; exit }'
     )"
-    log_event "link details: connection=${connection:-unknown}; access-point=${access_point:-unknown}"
+    log_event "link details: connection=${connection_name:-unknown}; uuid=${connection_uuid:-unknown}; access-point=${access_point:-unknown}"
 }
 
 reconnect_saved_connection() {
-    connection="$(active_connection 2>/dev/null || true)"
+    connection_uuid="$(active_connection_uuid 2>/dev/null || true)"
     log_link_details
     log_event "cycling ${interface} through NetworkManager"
     nmcli device disconnect "$interface" >/dev/null 2>&1 || true
     sleep 3
 
-    if [ -n "$connection" ]; then
-        if ! nmcli connection up "$connection" ifname "$interface" >/dev/null 2>&1; then
-            log_event "saved connection activation failed: ${connection}"
+    if [ -n "$connection_uuid" ]; then
+        if ! nmcli connection up uuid "$connection_uuid" ifname "$interface" >/dev/null 2>&1; then
+            log_event "saved connection activation failed: uuid=${connection_uuid}"
         fi
     else
         log_event "active connection unknown; using device fallback"
