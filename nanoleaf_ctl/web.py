@@ -56,6 +56,7 @@ _last_device_error: str | None = None
 _control_mode = "automation"
 _manual_override_until: float | None = None
 _nap_brightness: int | None = None
+_party_effect: str | None = None
 _sim_log: deque = deque(maxlen=200)
 _watchdog_stop = threading.Event()
 _watchdog_thread: threading.Thread | None = None
@@ -70,6 +71,8 @@ _LOG_MAX_BYTES = 1_000_000
 _NAP_DEFAULT_MINUTES = 40
 _NAP_DEFAULT_BRIGHTNESS = 5
 _NAP_RGB = (255, 106, 0)
+_PARTY_DEFAULT_MINUTES = 60
+_PARTY_MAX_MINUTES = 480
 _AUTO_START_INITIAL_DELAY = 5
 _AUTO_START_MAX_DELAY = 60
 
@@ -158,31 +161,35 @@ def _api_failure(exc: Exception, operation: str):
 
 def _begin_manual_override(minutes: int = 60) -> None:
     """Pause automation after a person directly changes the lights."""
-    global _control_mode, _manual_override_until, _nap_brightness
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
     with _sim_lock:
         if _sim_running:
             _control_mode = "manual_override"
             _manual_override_until = time.time() + minutes * 60
             _nap_brightness = None
+            _party_effect = None
             _log(f"Manual override started for {minutes} minutes")
 
 
 def _update_timed_override(now: float | None = None) -> tuple[bool, bool]:
     """Expire timed control and return ``(active, expired_this_call)``."""
-    global _control_mode, _manual_override_until, _nap_brightness
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
     expired_mode = None
     current_time = time.time() if now is None else now
     with _sim_lock:
-        timed_mode = _control_mode in ("manual_override", "nap")
+        timed_mode = _control_mode in ("manual_override", "nap", "party")
         if (timed_mode and _manual_override_until is not None
                 and current_time >= _manual_override_until):
             expired_mode = _control_mode
             _control_mode = "automation"
             _manual_override_until = None
             _nap_brightness = None
+            _party_effect = None
             timed_mode = False
     if expired_mode == "nap":
         _log("Nap mode complete; resuming automation")
+    elif expired_mode == "party":
+        _log("Party mode complete; resuming automation")
     elif expired_mode == "manual_override":
         _log("Manual override expired; resuming automation")
     return timed_mode, expired_mode is not None
@@ -427,6 +434,37 @@ def _device_effects(nl) -> list[str]:
     return response.json()
 
 
+def _device_effect_metadata(nl) -> list[dict]:
+    """Return stored effect definitions, including their plugin types."""
+    response = _requests.put(
+        nl.url + "/effects",
+        json={"write": {"command": "requestAll"}},
+        timeout=sunlight._API_TIMEOUT,
+    )
+    response.raise_for_status()
+    animations = response.json().get("animations", [])
+    return [effect for effect in animations if isinstance(effect, dict)]
+
+
+def _device_select_effect(nl, name: str) -> None:
+    response = _requests.put(
+        nl.url + "/effects", json={"select": name},
+        timeout=sunlight._API_TIMEOUT,
+    )
+    response.raise_for_status()
+
+
+def _rhythm_effect_names(nl) -> list[str]:
+    """Return installed effects that use the device's microphone plugin."""
+    names = {
+        effect.get("animName")
+        for effect in _device_effect_metadata(nl)
+        if str(effect.get("pluginType", "")).lower() == "rhythm"
+        and effect.get("animName")
+    }
+    return sorted(names)
+
+
 def _build_window_config(data: dict) -> sunlight.WindowConfig:
     """Validate dashboard input and return a simulator configuration."""
     latitude = float(data.get("lat", sunlight.DEFAULT_LAT))
@@ -574,20 +612,134 @@ def api_effect():
         effects = _device_effects(nl)
         if name not in effects:
             return jsonify({"error": f"Effect '{name}' not found"}), 404
-        response = _requests.put(
-            nl.url + "/effects", json={"select": name}, timeout=sunlight._API_TIMEOUT,
-        )
-        response.raise_for_status()
+        _device_select_effect(nl, name)
         _begin_manual_override()
         return jsonify({"effect": name})
     except Exception as e:
         return _api_failure(e, "change effect")
 
 
+@app.route("/api/party/effects")
+def api_party_effects():
+    """List installed microphone-reactive scenes available for Party Mode."""
+    try:
+        nl = _get_nl()
+        return jsonify({
+            "effects": _rhythm_effect_names(nl),
+            "current": _device_get(nl, "/effects/select"),
+        })
+    except Exception as e:
+        return _api_failure(e, "load Party Mode effects")
+
+
+@app.route("/api/party/start", methods=["POST"])
+def api_party_start():
+    """Run a microphone-reactive scene, then restore daylight automation."""
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
+    global _device_online, _device_last_seen, _last_device_error
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("effect", "")).strip()
+    try:
+        duration = max(
+            5,
+            min(_PARTY_MAX_MINUTES, int(data.get("minutes", _PARTY_DEFAULT_MINUTES))),
+        )
+    except (TypeError, ValueError):
+        return jsonify({"error": "Party duration must be an integer"}), 400
+    if not name:
+        return jsonify({"error": "Choose a sound-reactive scene"}), 400
+
+    with _sim_lock:
+        if not _sim_running:
+            return jsonify({
+                "status": "error",
+                "error": "Sunlight automation must be running so Party Mode can restore it",
+            }), 409
+
+    try:
+        nl = _get_nl()
+        if name not in _rhythm_effect_names(nl):
+            return jsonify({
+                "error": f"Effect '{name}' is not an installed sound-reactive scene",
+            }), 400
+    except Exception as e:
+        return _api_failure(e, "prepare Party Mode")
+
+    with _device_write_lock:
+        until = time.time() + duration * 60
+        with _sim_lock:
+            if not _sim_running:
+                return jsonify({
+                    "status": "error",
+                    "error": "Sunlight automation must be running so Party Mode can restore it",
+                }), 409
+            previous_control = (
+                _control_mode, _manual_override_until, _nap_brightness, _party_effect,
+            )
+            # Reserve control before touching the device so automation cannot
+            # overwrite the Rhythm scene while it is being activated.
+            _control_mode = "party"
+            _manual_override_until = until
+            _nap_brightness = None
+            _party_effect = name
+
+        try:
+            _device_select_effect(nl, name)
+        except Exception as e:
+            with _sim_lock:
+                if _control_mode == "party" and _manual_override_until == until:
+                    (
+                        _control_mode, _manual_override_until,
+                        _nap_brightness, _party_effect,
+                    ) = previous_control
+                _device_online = False
+                _last_device_error = _redact(e)
+            return _api_failure(e, "start Party Mode")
+
+        with _sim_lock:
+            if _control_mode != "party" or _manual_override_until != until:
+                # A stop/resume or another override won the race while the
+                # device request was in flight. Force the simulator to probe
+                # and reconcile instead of trusting its cached daylight state.
+                _device_online = False
+                return jsonify({
+                    "status": "error",
+                    "error": "Party Mode setup was superseded by another control request",
+                }), 409
+            _device_online = True
+            _device_last_seen = time.time()
+            _last_device_error = None
+
+    _log(f"Party mode started for {duration} minutes with effect {name!r}")
+    return jsonify({
+        "status": "party started",
+        "minutes": duration,
+        "effect": name,
+        "until": until,
+    })
+
+
+@app.route("/api/party/stop", methods=["POST"])
+def api_party_stop():
+    """End Party Mode early and force daylight to reconcile immediately."""
+    global _control_mode, _manual_override_until, _party_effect, _device_online
+    with _sim_lock:
+        if not _sim_running:
+            return jsonify({"status": "error", "error": "Simulator is not running"}), 409
+        if _control_mode != "party":
+            return jsonify({"status": "not active"})
+        _control_mode = "automation"
+        _manual_override_until = None
+        _party_effect = None
+        _device_online = False
+    _log("Party mode ended early; automation resume requested")
+    return jsonify({"status": "resuming"})
+
+
 @app.route("/api/nap/start", methods=["POST"])
 def api_nap_start():
     """Dim to a warm amber scene, then automatically resume automation."""
-    global _control_mode, _manual_override_until, _nap_brightness
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
     global _device_online, _device_last_seen, _last_device_error
     data = request.get_json(silent=True) or {}
     try:
@@ -617,13 +769,14 @@ def api_nap_start():
                     "error": "Sunlight automation must be running so Nap Mode can restore it",
                 }), 409
             previous_control = (
-                _control_mode, _manual_override_until, _nap_brightness,
+                _control_mode, _manual_override_until, _nap_brightness, _party_effect,
             )
             # Reserve the mode before the device write. The simulator uses the
             # same write lock and rechecks this state after acquiring it.
             _control_mode = "nap"
             _manual_override_until = until
             _nap_brightness = brightness
+            _party_effect = None
 
         try:
             sunlight.apply_light(nl, {
@@ -634,7 +787,10 @@ def api_nap_start():
         except Exception as e:
             with _sim_lock:
                 if _control_mode == "nap" and _manual_override_until == until:
-                    _control_mode, _manual_override_until, _nap_brightness = previous_control
+                    (
+                        _control_mode, _manual_override_until,
+                        _nap_brightness, _party_effect,
+                    ) = previous_control
                 _device_online = False
                 _last_device_error = _redact(e)
             return _api_failure(e, "start Nap Mode")
@@ -660,7 +816,8 @@ def api_nap_start():
 @app.route("/api/nap/stop", methods=["POST"])
 def api_nap_stop():
     """End Nap Mode early and force sunlight automation to reconcile."""
-    global _control_mode, _manual_override_until, _nap_brightness, _device_online
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
+    global _device_online
     with _sim_lock:
         if not _sim_running:
             return jsonify({"status": "error", "error": "Simulator is not running"}), 409
@@ -669,6 +826,7 @@ def api_nap_stop():
         _control_mode = "automation"
         _manual_override_until = None
         _nap_brightness = None
+        _party_effect = None
         _device_online = False
     _log("Nap mode ended early; automation resume requested")
     return jsonify({"status": "resuming"})
@@ -685,6 +843,7 @@ def api_sunlight_status():
         control_mode = _control_mode
         override_until = _manual_override_until
         nap_brightness = _nap_brightness
+        party_effect = _party_effect
         cfg = _sim_config
     result = {
         "running": running,
@@ -697,6 +856,10 @@ def api_sunlight_status():
             "brightness": nap_brightness,
             "rgb": list(_NAP_RGB),
         } if control_mode == "nap" and override_until is not None else None),
+        "party": ({
+            "until": override_until,
+            "effect": party_effect,
+        } if control_mode == "party" and override_until is not None else None),
         "device_last_seen": last_seen,
     }
     if state:
@@ -716,7 +879,7 @@ def api_sunlight_status():
 @app.route("/api/sunlight/start", methods=["POST"])
 def api_sunlight_start():
     global _sim_thread, _sim_config, _sim_running, _sim_demo, _sim_generation, _sim_file_lock
-    global _control_mode, _manual_override_until, _nap_brightness
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
 
     with _sim_lock:
         _auto_start_cancel.set()
@@ -760,6 +923,7 @@ def api_sunlight_start():
         _control_mode = "automation"
         _manual_override_until = None
         _nap_brightness = None
+        _party_effect = None
         _sim_generation += 1
         gen = _sim_generation
 
@@ -772,7 +936,8 @@ def api_sunlight_start():
 
 @app.route("/api/sunlight/stop", methods=["POST"])
 def api_sunlight_stop():
-    global _sim_running, _sim_demo, _control_mode, _manual_override_until, _nap_brightness
+    global _sim_running, _sim_demo, _control_mode, _manual_override_until
+    global _nap_brightness, _party_effect
     with _sim_lock:
         _auto_start_cancel.set()
         _sim_running = False
@@ -780,6 +945,7 @@ def api_sunlight_stop():
         _control_mode = "stopped"
         _manual_override_until = None
         _nap_brightness = None
+        _party_effect = None
     # Lock is released in _run_sim_loop when it exits
     _log("Stop requested")
     return jsonify({"status": "stopped"})
@@ -788,13 +954,15 @@ def api_sunlight_stop():
 @app.route("/api/sunlight/resume", methods=["POST"])
 def api_sunlight_resume():
     """End a manual override and force automation to reconcile next cycle."""
-    global _control_mode, _manual_override_until, _nap_brightness, _device_online
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
+    global _device_online
     with _sim_lock:
         if not _sim_running:
             return jsonify({"status": "error", "error": "Simulator is not running"}), 409
         _control_mode = "automation"
         _manual_override_until = None
         _nap_brightness = None
+        _party_effect = None
         _device_online = False
     _log("Manual override ended; automation resume requested")
     return jsonify({"status": "resuming"})
@@ -1079,6 +1247,50 @@ _HTML = """\
     color: var(--green);
     background: rgba(78, 204, 163, 0.1);
   }
+  /* Party Mode */
+  .party-card {
+    position: relative; overflow: hidden;
+    background:
+      radial-gradient(circle at 8% 12%, rgba(170,80,255,.14), transparent 32%),
+      radial-gradient(circle at 92% 88%, rgba(0,220,255,.10), transparent 34%),
+      var(--card);
+  }
+  .party-layout {
+    display: grid; grid-template-columns: minmax(230px, 1fr) minmax(310px, 1.25fr);
+    gap: 20px; align-items: center;
+  }
+  .party-intro { display: grid; grid-template-columns: 72px 1fr; gap: 15px; align-items: center; }
+  .party-visualizer {
+    height: 72px; display: flex; align-items: center; justify-content: center; gap: 5px;
+    border: 1px solid rgba(172,112,255,.45); border-radius: 18px;
+    background: rgba(12,18,34,.55); box-shadow: inset 0 0 24px rgba(91,55,160,.12);
+  }
+  .party-bar {
+    width: 7px; height: 16px; border-radius: 7px;
+    background: linear-gradient(180deg, #ff7ad9, #7d8cff 55%, #53e7d5);
+    opacity: .48; transform-origin: center;
+  }
+  .party-card.active .party-bar { opacity: 1; animation: party-pulse .72s ease-in-out infinite alternate; }
+  .party-card.active .party-bar:nth-child(2) { animation-delay: -.31s; }
+  .party-card.active .party-bar:nth-child(3) { animation-delay: -.52s; }
+  .party-card.active .party-bar:nth-child(4) { animation-delay: -.18s; }
+  .party-card.active .party-bar:nth-child(5) { animation-delay: -.43s; }
+  @keyframes party-pulse { from { height: 13px; } to { height: 55px; } }
+  .party-copy { display: grid; gap: 4px; }
+  .party-copy strong { color: #dcb8ff; font-size: 1.06em; }
+  .party-copy span { color: var(--text2); font-size: .83em; line-height: 1.45; }
+  .party-controls { display: grid; grid-template-columns: minmax(150px, 1fr) 118px auto; gap: 9px; align-items: end; }
+  .party-field { display: grid; gap: 4px; }
+  .party-field label { color: var(--text2); font-size: .72em; }
+  .party-field select {
+    width: 100%; min-height: 44px; padding: 7px 9px;
+    color: var(--text); background: var(--accent);
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .party-actions { display: flex; gap: 8px; }
+  .party-actions .primary { background: linear-gradient(135deg, #a855f7, #536dfe); border-color: #a875ef; }
+  .party-status { grid-column: 1 / -1; min-height: 20px; color: var(--text2); font-size: .8em; }
+  .party-status strong { color: #dcb8ff; }
   /* Sunlight */
   .sim-status {
     display: flex;
@@ -1208,7 +1420,7 @@ _HTML = """\
   .diagnostics { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
   @media (min-width: 800px) {
     .grid { grid-template-columns: 1fr 1fr; }
-    .automation-card { grid-column: 1 / -1; }
+    .automation-card, .party-card { grid-column: 1 / -1; }
   }
   @media (max-width: 520px) {
     body { padding: 12px; }
@@ -1222,6 +1434,13 @@ _HTML = """\
     .nap-controls { width: 100%; }
     .nap-field { flex: 1; }
     .nap-field input { width: 100%; }
+    .party-layout { grid-template-columns: 1fr; }
+    .party-controls { grid-template-columns: 1fr 1fr; }
+    .party-actions { grid-column: 1 / -1; }
+    .party-actions button { flex: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .party-card.active .party-bar { animation: none; height: 32px; }
   }
 </style>
 </head>
@@ -1282,6 +1501,44 @@ _HTML = """\
   <div class="card">
     <h2>Effects</h2>
     <div class="effects-list" id="effectsList">loading...</div>
+  </div>
+
+  <!-- Party Mode -->
+  <div class="card party-card" id="partyCard">
+    <h2>Party Mode</h2>
+    <div class="party-layout">
+      <div class="party-intro">
+        <div class="party-visualizer" aria-hidden="true">
+          <span class="party-bar"></span><span class="party-bar"></span>
+          <span class="party-bar"></span><span class="party-bar"></span>
+          <span class="party-bar"></span>
+        </div>
+        <div class="party-copy">
+          <strong>Sound-reactive light</strong>
+          <span>The Skylight listens through its built-in microphone. Audio stays on the device; daylight resumes automatically.</span>
+        </div>
+      </div>
+      <div class="party-controls">
+        <div class="party-field">
+          <label for="partyEffect">Rhythm scene</label>
+          <select id="partyEffect" disabled><option>Loading scenes...</option></select>
+        </div>
+        <div class="party-field">
+          <label for="partyMinutes">Duration</label>
+          <select id="partyMinutes">
+            <option value="30">30 minutes</option>
+            <option value="60" selected>1 hour</option>
+            <option value="120">2 hours</option>
+            <option value="240">4 hours</option>
+          </select>
+        </div>
+        <div class="party-actions">
+          <button class="primary" id="partyStartBtn" onclick="startParty()" disabled>Start party</button>
+          <button id="partyStopBtn" onclick="stopParty()" style="display:none">End party</button>
+        </div>
+        <div class="party-status" id="partyStatus" aria-live="polite">Discovering sound-reactive scenes...</div>
+      </div>
+    </div>
   </div>
 
   <!-- Sunlight Simulator -->
@@ -1440,6 +1697,7 @@ const COLORS = [
   });
   refresh();
   loadEffects();
+  loadPartyEffects();
   setInterval(pollSim, 5000);
   setInterval(refresh, 15000);
   pollSim();
@@ -1562,6 +1820,52 @@ async function setEffect(name) {
   await post('/api/effect', {name});
   toast('Effect: ' + name);
   loadEffects();
+  setTimeout(refresh, 500);
+}
+
+// -- Party Mode --
+
+async function loadPartyEffects() {
+  const select = document.getElementById('partyEffect');
+  const start = document.getElementById('partyStartBtn');
+  const status = document.getElementById('partyStatus');
+  try {
+    const d = await api('/api/party/effects');
+    select.innerHTML = '';
+    d.effects.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      select.appendChild(option);
+    });
+    if (d.effects.includes(d.current)) select.value = d.current;
+    select.disabled = d.effects.length === 0;
+    start.disabled = d.effects.length === 0;
+    status.textContent = d.effects.length
+      ? d.effects.length + ' microphone-reactive scenes available.'
+      : 'No microphone-reactive scenes are installed on this device.';
+  } catch(e) {
+    select.innerHTML = '<option>Scenes unavailable</option>';
+    select.disabled = true;
+    start.disabled = true;
+    status.textContent = 'Unable to load sound-reactive scenes.';
+  }
+}
+
+async function startParty() {
+  const effect = document.getElementById('partyEffect').value;
+  const minutes = parseInt(document.getElementById('partyMinutes').value);
+  const d = await post('/api/party/start', {effect, minutes});
+  const until = new Date(d.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  toast('Party Mode: ' + d.effect + ' until ' + until);
+  pollSim();
+  setTimeout(refresh, 500);
+}
+
+async function stopParty() {
+  await post('/api/party/stop', {});
+  toast('Party ended; daylight automation resuming');
+  pollSim();
   setTimeout(refresh, 500);
 }
 
@@ -1693,6 +1997,12 @@ function updateHouseScene(d) {
     document.getElementById('sceneLight').textContent = 'Warm amber · resumes at ' + until;
     windowEl.style.fill = 'rgb(' + d.nap.rgb.join(',') + ')';
     windowEl.style.opacity = Math.max(.18, d.nap.brightness / 100);
+  } else if (d.control_mode === 'party' && d.party) {
+    const until = new Date(d.party.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    document.getElementById('sceneTitle').textContent = 'Party Mode';
+    document.getElementById('sceneLight').textContent = d.party.effect + ' - resumes at ' + until;
+    windowEl.style.fill = '#8b5cf6';
+    windowEl.style.opacity = .85;
   }
 
   graphic.setAttribute('aria-label',
@@ -1719,6 +2029,10 @@ async function pollSim() {
     const napStatus = document.getElementById('napStatus');
     const napStartBtn = document.getElementById('napStartBtn');
     const napStopBtn = document.getElementById('napStopBtn');
+    const partyCard = document.getElementById('partyCard');
+    const partyStatus = document.getElementById('partyStatus');
+    const partyStartBtn = document.getElementById('partyStartBtn');
+    const partyStopBtn = document.getElementById('partyStopBtn');
 
     updateHouseScene(d);
 
@@ -1726,9 +2040,14 @@ async function pollSim() {
     deviceStatus.innerHTML = '<strong>Device</strong> ' + (d.device_online ? 'Online' : 'Offline');
     const manualOverride = d.control_mode === 'manual_override';
     const napping = d.control_mode === 'nap' && d.nap;
-    const overriding = manualOverride || napping;
+    const partying = d.control_mode === 'party' && d.party;
+    const overriding = manualOverride || napping || partying;
     controlStatus.className = 'status-pill' + (overriding ? ' override' : '');
-    if (napping) {
+    if (partying) {
+      const until = new Date(d.party.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+      controlStatus.innerHTML = '<strong>Control</strong> Party until ' + until;
+      partyStatus.textContent = d.party.effect + ' - listening through the Skylight microphone until ' + until;
+    } else if (napping) {
       const until = new Date(d.nap.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
       controlStatus.innerHTML = '<strong>Control</strong> Nap until ' + until;
       napStatus.textContent = d.nap.brightness + '% warm amber · daylight resumes at ' + until;
@@ -1742,6 +2061,15 @@ async function pollSim() {
         ? 'Dim warm amber light for a timed rest, then resume daylight.'
         : 'Start sunlight automation before using Nap Mode.';
     }
+    if (!partying) {
+      partyStatus.textContent = d.running
+        ? 'Choose a Rhythm scene and duration; daylight will resume afterward.'
+        : 'Start sunlight automation before using Party Mode.';
+    }
+    partyCard.classList.toggle('active', Boolean(partying));
+    partyStartBtn.style.display = partying ? 'none' : '';
+    partyStartBtn.disabled = !d.running || document.getElementById('partyEffect').disabled;
+    partyStopBtn.style.display = partying ? '' : 'none';
     resumeBtn.style.display = manualOverride ? '' : 'none';
     napStartBtn.style.display = napping ? 'none' : '';
     napStartBtn.disabled = !d.running;
@@ -1761,13 +2089,20 @@ async function pollSim() {
     if (d.running) {
       dot.classList.toggle('running', d.device_online && !overriding);
       label.textContent = !d.device_online ? 'Device offline' :
-        (napping ? 'Nap mode' : (manualOverride ? 'Manual override' : (d.demo ? 'Demo' : 'Running')));
+        (partying ? 'Party mode' : (napping ? 'Nap mode' :
+          (manualOverride ? 'Manual override' : (d.demo ? 'Demo' : 'Running'))));
       startBtn.style.display = 'none';
       demoBtn.style.display = 'none';
       stopBtn.style.display = '';
       form.style.display = 'none';
 
-      if (napping) {
+      if (partying) {
+        const until = new Date(d.party.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+        detail.textContent = 'party mode - ' + d.party.effect +
+          ' - microphone reactive - until ' + until;
+        preview.style.background = 'linear-gradient(90deg, #4f46e5, #a855f7, #06b6d4)';
+        preview.style.opacity = 1;
+      } else if (napping) {
         const until = new Date(d.nap.until * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
         detail.innerHTML = '<strong>nap mode</strong> &middot; warm amber &middot; ' +
           d.nap.brightness + '% &middot; until ' + until;
@@ -1800,6 +2135,8 @@ async function pollSim() {
       resumeBtn.style.display = 'none';
       napStartBtn.disabled = true;
       napStopBtn.style.display = 'none';
+      partyStartBtn.disabled = true;
+      partyStopBtn.style.display = 'none';
       form.style.display = '';
       detail.innerHTML = '';
       preview.style.background = '#333';
@@ -1876,7 +2213,7 @@ async function refreshLog() {
 def _auto_start_simulator() -> None:
     """Start automation when the device becomes reachable after boot."""
     global _sim_thread, _sim_config, _sim_running, _sim_generation, _sim_file_lock
-    global _control_mode, _manual_override_until, _nap_brightness
+    global _control_mode, _manual_override_until, _nap_brightness, _party_effect
 
     cfg = sunlight.WindowConfig(brightness_bias=-5)
     weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
@@ -1930,6 +2267,7 @@ def _auto_start_simulator() -> None:
         _control_mode = "automation"
         _manual_override_until = None
         _nap_brightness = None
+        _party_effect = None
         _sim_generation += 1
         gen = _sim_generation
 

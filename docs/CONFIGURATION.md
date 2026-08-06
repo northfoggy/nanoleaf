@@ -128,6 +128,19 @@ These values apply to the current nap only and are not persisted. When the timer
 expires or End nap is selected, the simulator promptly reapplies the current
 weather-aware daylight state.
 
+## Party Mode
+
+Party Mode is a specialized timed override for the Nanoleaf's installed Rhythm
+scenes. The dashboard queries effect metadata rather than guessing from scene
+names, so only effects that identify themselves as microphone-reactive are
+offered. Durations range from 5 to 480 minutes through the API; the dashboard
+provides convenient presets from 30 minutes through four hours. The selection
+and duration apply only to the current party and are not persisted.
+
+The Nanoleaf controller performs the sound analysis locally. This application
+selects the scene and coordinates ownership with sunlight and Nap Mode; it does
+not receive an audio stream.
+
 ## Runtime files
 
 | File | Role |

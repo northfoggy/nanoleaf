@@ -404,6 +404,156 @@ def test_nap_mode_expiry_resumes_automation(monkeypatch):
     assert messages == ["Nap mode complete; resuming automation"]
 
 
+def test_party_effect_discovery_filters_for_microphone_plugins(monkeypatch):
+    monkeypatch.setattr(
+        web,
+        "_device_effect_metadata",
+        lambda _nl: [
+            {"animName": "Cosmic Galaxy", "pluginType": "rhythm"},
+            {"animName": "Blue Skies", "pluginType": "color"},
+            {"animName": "Shooting Stars", "pluginType": "rhythm"},
+            {"pluginType": "rhythm"},
+        ],
+    )
+
+    assert web._rhythm_effect_names(object()) == [
+        "Cosmic Galaxy", "Shooting Stars",
+    ]
+
+
+def test_party_mode_activates_rhythm_scene_and_reports_status(monkeypatch):
+    selected = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "automation")
+    monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_nap_brightness", None)
+    monkeypatch.setattr(web, "_party_effect", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web, "_rhythm_effect_names", lambda _nl: ["Cosmic Galaxy"])
+    monkeypatch.setattr(web.time, "time", lambda: 1_000.0)
+
+    def select_effect(_nl, name):
+        assert web._control_mode == "party"
+        selected.append(name)
+
+    monkeypatch.setattr(web, "_device_select_effect", select_effect)
+
+    response = web.app.test_client().post(
+        "/api/party/start",
+        json={"effect": "Cosmic Galaxy", "minutes": 60},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "party started",
+        "minutes": 60,
+        "effect": "Cosmic Galaxy",
+        "until": 4_600.0,
+    }
+    assert selected == ["Cosmic Galaxy"]
+    status = web.app.test_client().get("/api/sunlight/status").get_json()
+    assert status["control_mode"] == "party"
+    assert status["party"] == {
+        "effect": "Cosmic Galaxy", "until": 4_600.0,
+    }
+
+
+def test_party_mode_rejects_non_rhythm_effect(monkeypatch):
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web, "_rhythm_effect_names", lambda _nl: ["Cosmic Galaxy"])
+
+    response = web.app.test_client().post(
+        "/api/party/start",
+        json={"effect": "Blue Skies", "minutes": 60},
+    )
+
+    assert response.status_code == 400
+    assert "not an installed sound-reactive scene" in response.get_json()["error"]
+
+
+def test_party_mode_rolls_back_when_scene_activation_fails(monkeypatch):
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "nap")
+    monkeypatch.setattr(web, "_manual_override_until", 9_999.0)
+    monkeypatch.setattr(web, "_nap_brightness", 5)
+    monkeypatch.setattr(web, "_party_effect", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web, "_rhythm_effect_names", lambda _nl: ["Cosmic Galaxy"])
+    monkeypatch.setattr(web.time, "time", lambda: 1_000.0)
+
+    def fail(_nl, _name):
+        assert web._control_mode == "party"
+        raise requests.ConnectionError("device unavailable")
+
+    monkeypatch.setattr(web, "_device_select_effect", fail)
+
+    response = web.app.test_client().post(
+        "/api/party/start", json={"effect": "Cosmic Galaxy"},
+    )
+
+    assert response.status_code == 502
+    assert web._control_mode == "nap"
+    assert web._manual_override_until == 9_999.0
+    assert web._nap_brightness == 5
+    assert web._party_effect is None
+    assert web._device_online is False
+
+
+def test_party_mode_reconciles_when_start_is_superseded(monkeypatch):
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "automation")
+    monkeypatch.setattr(web, "_manual_override_until", None)
+    monkeypatch.setattr(web, "_party_effect", None)
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_get_nl", lambda: object())
+    monkeypatch.setattr(web, "_rhythm_effect_names", lambda _nl: ["Cosmic Galaxy"])
+    monkeypatch.setattr(web.time, "time", lambda: 1_000.0)
+
+    def supersede(_nl, _name):
+        web._control_mode = "automation"
+        web._manual_override_until = None
+        web._party_effect = None
+
+    monkeypatch.setattr(web, "_device_select_effect", supersede)
+
+    response = web.app.test_client().post(
+        "/api/party/start", json={"effect": "Cosmic Galaxy"},
+    )
+
+    assert response.status_code == 409
+    assert web._control_mode == "automation"
+    assert web._device_online is False
+
+
+def test_party_mode_can_end_early_and_expire(monkeypatch):
+    messages = []
+    monkeypatch.setattr(web, "_sim_running", True)
+    monkeypatch.setattr(web, "_control_mode", "party")
+    monkeypatch.setattr(web, "_manual_override_until", 3_400.0)
+    monkeypatch.setattr(web, "_party_effect", "Cosmic Galaxy")
+    monkeypatch.setattr(web, "_device_online", True)
+    monkeypatch.setattr(web, "_log", messages.append)
+
+    response = web.app.test_client().post("/api/party/stop", json={})
+
+    assert response.status_code == 200
+    assert web._control_mode == "automation"
+    assert web._manual_override_until is None
+    assert web._party_effect is None
+    assert web._device_online is False
+
+    monkeypatch.setattr(web, "_control_mode", "party")
+    monkeypatch.setattr(web, "_manual_override_until", 4_000.0)
+    monkeypatch.setattr(web, "_party_effect", "Shooting Stars")
+    assert web._update_timed_override(now=4_000.0) == (False, True)
+    assert web._control_mode == "automation"
+    assert web._party_effect is None
+    assert messages[-1] == "Party mode complete; resuming automation"
+
+
 def test_expiry_reapplies_unchanged_automatic_target(monkeypatch):
     applied = []
     sleeps = []
@@ -617,3 +767,8 @@ def test_dashboard_includes_branding_and_dynamic_house_scene():
     assert 'id="napMinutes"' in html
     assert 'id="napBrightness"' in html
     assert 'id="napStartBtn"' in html
+    assert 'id="partyCard"' in html
+    assert 'id="partyEffect"' in html
+    assert 'id="partyMinutes"' in html
+    assert 'id="partyStartBtn"' in html
+    assert "built-in microphone" in html

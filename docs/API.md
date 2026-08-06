@@ -50,6 +50,7 @@ Representative response:
   "control_mode": "automation",
   "manual_override_until": null,
   "nap": null,
+  "party": null,
   "device_last_seen": 1785100301.17,
   "config": {
     "latitude": 34.13,
@@ -162,6 +163,58 @@ sunlight automation is stopped and HTTP 502 if the device cannot be reached.
 No body is required. Ends Nap Mode early and forces the current daylight state
 to be reapplied. If Nap Mode is not active, returns
 `{"status":"not active"}` without changing the current control mode.
+
+## Party Mode
+
+Party Mode activates only effects that the device identifies as Rhythm plugins.
+These scenes react to ambient sound through the Nanoleaf's built-in microphone;
+the server does not capture, receive, or store audio.
+
+### `GET /api/party/effects`
+
+Returns installed microphone-reactive scenes and the currently selected device
+effect:
+
+```json
+{
+  "effects": ["Cosmic Galaxy", "Gentle Rain", "Shooting Stars"],
+  "current": "Cosmic Galaxy"
+}
+```
+
+The available names come from the physical device and can vary with downloaded
+scenes, product model, and firmware.
+
+### `POST /api/party/start`
+
+Both fields are required:
+
+```json
+{"effect":"Cosmic Galaxy","minutes":60}
+```
+
+Duration is clamped to 5-480 minutes. The effect must be installed and report
+`pluginType: "rhythm"`; ordinary color effects are rejected with HTTP 400.
+The route reserves Party Mode before activating the scene so the sunlight loop
+cannot overwrite it concurrently.
+
+```json
+{
+  "status":"party started",
+  "effect":"Cosmic Galaxy",
+  "minutes":60,
+  "until":1785103901.17
+}
+```
+
+While active, `/api/sunlight/status` reports `control_mode: "party"` and a
+`party` object containing `effect` and `until`.
+
+### `POST /api/party/stop`
+
+No body is required. Ends Party Mode early and forces current daylight to be
+reapplied. Expiration performs the same restoration automatically. Party Mode
+requires running sunlight automation so a known state is available to restore.
 
 ## Automation control
 
