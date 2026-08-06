@@ -68,6 +68,14 @@ scheduled end time, and daylight automation resumes automatically within about
 one second of that time. Select End nap to resume early. Nap Mode requires the
 sunlight simulator to be running so there is an automation state to restore.
 
+Party Mode discovers the Rhythm scenes installed on the connected Nanoleaf.
+Choose a scene and duration, then select Start party. The light's built-in
+microphone listens to sound in the room; no audio is sent to the Raspberry Pi
+or retained by this application. The dashboard displays the scheduled end time
+and restores current daylight automatically. Talking, television audio, and
+other sufficiently loud room noise can also influence a Rhythm scene. Select
+End party to restore daylight early.
+
 ## Logs
 
 Systemd lifecycle and HTTP request logs:

@@ -41,6 +41,8 @@ views. Published screenshots use sanitized example values.
 - Pauses automation for one hour when a person makes a direct dashboard change.
 - Provides a 40-minute Nap Mode that uses dim warm-amber light and then resumes
   the current daylight state automatically.
+- Provides a timed Party Mode that discovers installed sound-reactive Rhythm
+  scenes, uses the Nanoleaf's built-in microphone, and then restores daylight.
 - Prevents two simulator processes on the same host from controlling the lights.
 - Exposes a responsive LAN dashboard with a live house, location, orientation,
   weather, and simulated-light visualization.
