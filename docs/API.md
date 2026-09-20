@@ -66,13 +66,21 @@ Representative response:
     "color_temp": 5530,
     "brightness": 68,
     "weather": "clear",
-    "cloud_cover": 6
+    "cloud_cover": 6,
+    "irradiance_w_m2": 412.4,
+    "irradiance_orientation": "southwest",
+    "brightness_source": "open-meteo-irradiance",
+    "weather_source": "open-meteo",
+    "weather_age_seconds": 184.2
   }
 }
 ```
 
 Optional fields are omitted until a state or configuration exists. Epoch values
-are Unix seconds.
+are Unix seconds. `irradiance_w_m2` is Open-Meteo's global tilted irradiance on
+a vertical plane facing the configured window direction. When that field is
+unavailable, `brightness_source` reports `cloud-cover-fallback` and the legacy
+cloud-cover attenuation is used.
 
 ## Device information and control
 

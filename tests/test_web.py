@@ -764,6 +764,8 @@ def test_dashboard_includes_branding_and_dynamic_house_scene():
     assert 'id="sceneLocation"' in html
     assert 'id="sceneOrientation"' in html
     assert 'id="sceneWeather"' in html
+    assert 'id="sceneIrradiance"' in html
+    assert "Open-Meteo irradiance" in html
     assert 'id="napMinutes"' in html
     assert 'id="napBrightness"' in html
     assert 'id="napStartBtn"' in html

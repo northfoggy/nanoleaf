@@ -2,6 +2,16 @@
 
 This project follows semantic versioning while it remains experimental.
 
+## Unreleased
+
+### Changed
+
+- Daylight brightness now uses Open-Meteo global tilted irradiance for the
+  configured vertical window orientation. Cloud cover remains a secondary
+  color input and an automatic compatibility fallback.
+- The dashboard and status API now expose window irradiance, weather source,
+  brightness source, and weather-data freshness.
+
 ## 0.3.1
 
 ### Fixed

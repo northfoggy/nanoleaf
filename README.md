@@ -35,7 +35,8 @@ views. Published screenshots use sanitized example values.
 - Computes the sun's elevation and azimuth for a configured location.
 - Adjusts brightness for the window's compass orientation.
 - Uses blue-hour, golden-hour, daylight, and nighttime lighting profiles.
-- Modulates the result using current cloud cover and weather from Open-Meteo.
+- Uses orientation-aware solar irradiance from Open-Meteo to bound brightness,
+  with cloud cover and weather shaping color and providing a safe fallback.
 - Applies smooth, one-minute transitions to the Nanoleaf device.
 - Automatically resumes the correct state after a device disconnect.
 - Pauses automation for one hour when a person makes a direct dashboard change.
@@ -45,7 +46,7 @@ views. Published screenshots use sanitized example values.
   scenes, uses the Nanoleaf's built-in microphone, and then restores daylight.
 - Prevents two simulator processes on the same host from controlling the lights.
 - Exposes a responsive LAN dashboard with a live house, location, orientation,
-  weather, and simulated-light visualization.
+  weather, window irradiance, data freshness, and simulated-light visualization.
 
 ## Requirements
 

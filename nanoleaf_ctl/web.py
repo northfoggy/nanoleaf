@@ -271,7 +271,9 @@ def _run_sim_loop_inner(nl, cfg, weather_cache, my_generation, demo=False):
         if weather_cache is not None:
             weather = weather_cache.get()
             if weather:
-                _log(f"Weather: {weather.condition}, cloud={weather.cloud_cover}%")
+                irradiance = (f", window={weather.irradiance_w_m2:.1f} W/m²"
+                              if weather.irradiance_w_m2 is not None else "")
+                _log(f"Weather: {weather.condition}, cloud={weather.cloud_cover}%{irradiance}")
             state = sunlight.apply_weather(state, weather)
             state["weather_age_seconds"] = weather_cache.age_seconds
 
@@ -901,7 +903,7 @@ def api_sunlight_start():
 
     weather_cache = None
     if not demo and not data.get("no_weather", False):
-        weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
+        weather_cache = WeatherCache(cfg.latitude, cfg.longitude, cfg.facing)
 
     # Recheck after potentially slow setup, then claim both locks atomically.
     with _sim_lock:
@@ -1576,6 +1578,7 @@ _HTML = """\
           <div class="scene-fact"><span class="fact-icon" aria-hidden="true">⌖</span><span class="fact-label">Location</span><span class="fact-value" id="sceneLocation">—</span></div>
           <div class="scene-fact"><span class="fact-icon" aria-hidden="true">↗</span><span class="fact-label">Orientation</span><span class="fact-value" id="sceneOrientation">—</span></div>
           <div class="scene-fact"><span class="fact-icon" aria-hidden="true">☁</span><span class="fact-label">Weather</span><span class="fact-value" id="sceneWeather">—</span></div>
+          <div class="scene-fact"><span class="fact-icon" aria-hidden="true">◫</span><span class="fact-label">Weather input</span><span class="fact-value" id="sceneIrradiance">—</span></div>
           <div class="scene-fact"><span class="fact-icon" aria-hidden="true">☀</span><span class="fact-label">Light</span><span class="fact-value" id="sceneLight">—</span></div>
         </div>
       </div>
@@ -1973,6 +1976,9 @@ function updateHouseScene(d) {
   document.getElementById('sceneWeather').textContent = s && s.weather
     ? weather + ' · ' + s.cloud_cover + '% cloud cover'
     : 'Weather unavailable';
+  document.getElementById('sceneIrradiance').textContent = s && Number.isFinite(Number(s.irradiance_w_m2))
+    ? Math.round(Number(s.irradiance_w_m2)) + ' W/m² · Open-Meteo irradiance'
+    : (s && s.weather ? 'Cloud-cover fallback · Open-Meteo' : 'Unavailable');
 
   if (s) {
     const lightValue = s.mode === 'color_temp' ? s.color_temp + 'K' :
@@ -2008,7 +2014,17 @@ function updateHouseScene(d) {
   graphic.setAttribute('aria-label',
     'House at ' + document.getElementById('sceneLocation').textContent + ', ' +
     facing + '-facing window, weather ' + weather +
-    (s ? ', simulated ' + s.phase + ' at ' + s.brightness + ' percent brightness' : ''));
+    (s ? ', simulated ' + s.phase + ' at ' + s.brightness + ' percent brightness' : '') +
+    (s && Number.isFinite(Number(s.irradiance_w_m2))
+      ? ', window irradiance ' + Math.round(Number(s.irradiance_w_m2)) + ' watts per square meter'
+      : ''));
+}
+
+function formatWeatherAge(seconds) {
+  const age = Number(seconds);
+  if (!Number.isFinite(age)) return 'age unknown';
+  if (age < 60) return 'just updated';
+  return Math.floor(age / 60) + 'm old';
 }
 
 async function pollSim() {
@@ -2080,7 +2096,7 @@ async function pollSim() {
       const stale = age === null || age > 1800;
       weatherStatus.className = 'status-pill' + (stale ? ' override' : '');
       weatherStatus.innerHTML = '<strong>Weather</strong> ' + d.state.weather.replaceAll('_', ' ') +
-        (stale ? ' (stale)' : '');
+        ' · ' + formatWeatherAge(age) + (stale ? ' (stale)' : '');
     } else {
       weatherStatus.className = 'status-pill';
       weatherStatus.innerHTML = '<strong>Weather</strong> Unavailable';
@@ -2216,7 +2232,7 @@ def _auto_start_simulator() -> None:
     global _control_mode, _manual_override_until, _nap_brightness, _party_effect
 
     cfg = sunlight.WindowConfig(brightness_bias=-5)
-    weather_cache = WeatherCache(cfg.latitude, cfg.longitude)
+    weather_cache = WeatherCache(cfg.latitude, cfg.longitude, cfg.facing)
     attempt = 0
     delay = _AUTO_START_INITIAL_DELAY
 

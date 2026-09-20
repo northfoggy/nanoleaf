@@ -66,3 +66,96 @@ def test_weather_does_not_turn_night_state_back_on():
     assert state["mode"] == "off"
     assert state["brightness"] == 0
     assert state["weather"] == "overcast"
+    assert state["brightness_source"] == "astronomical"
+
+
+def test_window_irradiance_is_primary_brightness_input():
+    weather = WeatherState(
+        cloud_cover=100,
+        condition="overcast",
+        is_day=True,
+        timestamp=123.0,
+        irradiance_w_m2=175.0,
+        shortwave_radiation_w_m2=300.0,
+        irradiance_orientation="southwest",
+    )
+
+    state = sunlight.apply_weather(
+        {
+            "mode": "color_temp", "brightness": 80,
+            "color_temp": 5000, "phase": "day",
+        },
+        weather,
+    )
+
+    # 175 W/m² is one quarter of the 700 W/m² full scale; the perceptual
+    # square-root curve therefore caps brightness at 50%.
+    assert state["brightness"] == 50
+    assert state["brightness_source"] == "open-meteo-irradiance"
+    assert state["irradiance_w_m2"] == 175.0
+    assert state["irradiance_orientation"] == "southwest"
+    assert state["weather_source"] == "open-meteo"
+    # Cloud cover remains a secondary color input.
+    assert state["color_temp"] == 5500
+
+
+def test_irradiance_never_brightens_above_astronomical_state():
+    weather = WeatherState(
+        cloud_cover=0,
+        condition="clear",
+        is_day=True,
+        timestamp=123.0,
+        irradiance_w_m2=700.0,
+    )
+
+    state = sunlight.apply_weather(
+        {
+            "mode": "color_temp", "brightness": 30,
+            "color_temp": 3500, "phase": "morning",
+        },
+        weather,
+    )
+
+    assert state["brightness"] == 30
+
+
+def test_missing_irradiance_uses_legacy_cloud_cover_fallback():
+    weather = WeatherState(
+        cloud_cover=100,
+        condition="overcast",
+        is_day=True,
+        timestamp=123.0,
+    )
+
+    state = sunlight.apply_weather(
+        {
+            "mode": "color_temp", "brightness": 80,
+            "color_temp": 5000, "phase": "day",
+        },
+        weather,
+    )
+
+    assert state["brightness"] == 48
+    assert state["brightness_source"] == "cloud-cover-fallback"
+    assert "irradiance_w_m2" not in state
+
+
+def test_predawn_color_uses_cloud_fallback_instead_of_zero_irradiance():
+    weather = WeatherState(
+        cloud_cover=50,
+        condition="partly_cloudy",
+        is_day=False,
+        timestamp=123.0,
+        irradiance_w_m2=0.0,
+    )
+
+    state = sunlight.apply_weather(
+        {
+            "mode": "color", "brightness": 20,
+            "rgb": (100, 80, 60), "phase": "blue hour",
+        },
+        weather,
+    )
+
+    assert state["brightness"] == 16
+    assert state["brightness_source"] == "cloud-cover-fallback"

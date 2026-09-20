@@ -74,6 +74,11 @@ Accepted facing values are full or abbreviated compass directions:
 `north/n`, `northeast/ne`, `east/e`, `southeast/se`, `south/s`,
 `southwest/sw`, `west/w`, and `northwest/nw`.
 
+The facing direction also configures Open-Meteo's global tilted irradiance for
+a vertical window. Irradiance bounds the astronomical brightness target while
+cloud cover continues to influence color. If irradiance is absent or invalid,
+the controller automatically returns to its cloud-cover attenuation model.
+
 ## Dashboard configuration
 
 The dashboard's Start form accepts:

@@ -165,7 +165,10 @@ Solar simulation does not require weather. The dashboard can show weather as
 unavailable while continuing to control the light.
 
 Check internet reachability and system time. Open-Meteo requests use a
-ten-second timeout, and cached data refreshes every ten minutes. `--no-weather`
+ten-second timeout, and cached data refreshes every ten minutes. The dashboard
+shows window irradiance in W/m² and the observation age. A `Cloud-cover
+fallback` label means Open-Meteo responded without usable tilted irradiance;
+automation continues safely using the legacy attenuation model. `--no-weather`
 isolates weather from a direct CLI test.
 
 ## Manual controls appear to be undone

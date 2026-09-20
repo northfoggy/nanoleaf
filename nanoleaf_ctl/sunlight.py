@@ -11,6 +11,7 @@ happening outside your window.
 """
 
 import colorsys
+import math
 import time
 from datetime import datetime, date, timedelta, timezone
 from dataclasses import dataclass
@@ -292,6 +293,8 @@ def apply_weather(state: dict, weather) -> dict:
     """Modulate a light state based on current weather conditions.
 
     Effects of weather on window light:
+    - Tilted irradiance: bounds brightness using measured/modelled energy on
+      the configured window plane
     - Overcast: dims brightness, shifts color cooler/greyer
     - Rain: further dims, adds a blue-grey cast
     - Heavy rain/storms: significant dimming, flat grey light
@@ -302,26 +305,50 @@ def apply_weather(state: dict, weather) -> dict:
         return state
 
     state = dict(state)  # don't mutate the original
+    state["weather"] = weather.condition
+    state["cloud_cover"] = weather.cloud_cover
+    state["weather_timestamp"] = weather.timestamp
+    state["weather_source"] = weather.source
+    state["irradiance_orientation"] = weather.irradiance_orientation
+    if weather.irradiance_w_m2 is not None:
+        state["irradiance_w_m2"] = weather.irradiance_w_m2
+    if weather.shortwave_radiation_w_m2 is not None:
+        state["shortwave_radiation_w_m2"] = weather.shortwave_radiation_w_m2
+    if weather.direct_radiation_w_m2 is not None:
+        state["direct_radiation_w_m2"] = weather.direct_radiation_w_m2
+    if weather.diffuse_radiation_w_m2 is not None:
+        state["diffuse_radiation_w_m2"] = weather.diffuse_radiation_w_m2
+
     if state["mode"] == "off" or state.get("brightness", 0) == 0:
-        state["weather"] = weather.condition
-        state["cloud_cover"] = weather.cloud_cover
-        state["weather_timestamp"] = weather.timestamp
+        state["brightness_source"] = "astronomical"
         return state
     cloud = weather.cloud_factor  # 0.0 clear → 1.0 overcast
     condition = weather.condition
 
-    # Brightness reduction from clouds
-    # Clear: no change. Overcast: -40%. Rain: -55%. Storm: -65%.
-    if condition in ("rain_heavy", "thunderstorm"):
-        br_factor = 1.0 - 0.65 * cloud
-    elif weather.is_rainy:
-        br_factor = 1.0 - 0.55 * cloud
-    elif condition == "fog":
-        br_factor = 1.0 - 0.50 * cloud
+    # A perceptual square-root curve maps energy on the vertical window plane
+    # to a 0-100 brightness ceiling.  The astronomical model remains the upper
+    # bound so irradiance can attenuate a scene but cannot make twilight or a
+    # poorly aligned window unnaturally brighter.  A one-minute device fade
+    # smooths each ten-minute weather update.
+    if weather.irradiance_w_m2 is not None and weather.is_day:
+        full_scale_w_m2 = 700.0
+        irradiance = min(weather.irradiance_w_m2, full_scale_w_m2)
+        irradiance_cap = round(100 * math.sqrt(irradiance / full_scale_w_m2))
+        state["brightness"] = max(2, min(state["brightness"], irradiance_cap))
+        state["brightness_source"] = "open-meteo-irradiance"
     else:
-        br_factor = 1.0 - 0.40 * cloud
-
-    state["brightness"] = max(2, round(state["brightness"] * br_factor))
+        # Compatibility fallback for older/missing API responses and pre-dawn
+        # colorful phases where solar irradiance is naturally zero.
+        if condition in ("rain_heavy", "thunderstorm"):
+            br_factor = 1.0 - 0.65 * cloud
+        elif weather.is_rainy:
+            br_factor = 1.0 - 0.55 * cloud
+        elif condition == "fog":
+            br_factor = 1.0 - 0.50 * cloud
+        else:
+            br_factor = 1.0 - 0.40 * cloud
+        state["brightness"] = max(2, round(state["brightness"] * br_factor))
+        state["brightness_source"] = "cloud-cover-fallback"
 
     # Color shifts
     if state["mode"] == "color":
@@ -342,11 +369,6 @@ def apply_weather(state: dict, weather) -> dict:
         ct = state["color_temp"]
         ct_shift = round(500 * cloud)  # up to +500K cooler
         state["color_temp"] = min(6500, ct + ct_shift)
-
-    # Add weather info to state for logging
-    state["weather"] = condition
-    state["cloud_cover"] = weather.cloud_cover
-    state["weather_timestamp"] = weather.timestamp
 
     return state
 

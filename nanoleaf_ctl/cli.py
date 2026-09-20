@@ -219,8 +219,8 @@ def cmd_sunlight(args):
     # Set up weather if enabled
     weather_cache = None
     if not args.no_weather:
-        weather_cache = WeatherCache(args.lat, args.lon)
-        _out("Weather integration enabled (via Open-Meteo, updates every 10 min)")
+        weather_cache = WeatherCache(args.lat, args.lon, args.facing)
+        _out("Weather integration enabled (Open-Meteo window irradiance, updates every 10 min)")
 
     def _format_state(state):
         mode = state["mode"]
@@ -235,6 +235,9 @@ def cmd_sunlight(args):
         cloud = state.get("cloud_cover")
         if weather_str:
             val += f"  [{weather_str} {cloud}%]"
+        irradiance = state.get("irradiance_w_m2")
+        if irradiance is not None:
+            val += f"  [{irradiance:.0f} W/m² window]"
         return val
 
     def on_update(state):
