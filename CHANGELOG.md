@@ -4,6 +4,12 @@ This project follows semantic versioning while it remains experimental.
 
 ## Unreleased
 
+### Security
+
+- Require `certifi` 2026.10.19 or later so Python HTTPS clients no longer
+  trust the eMudhra/emSign root associated with compromised intermediate CA
+  keys (GHSA-6q48-6c7w-9gw2).
+
 ### Changed
 
 - Daylight brightness now uses Open-Meteo global tilted irradiance for the
