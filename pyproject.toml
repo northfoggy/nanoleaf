@@ -29,6 +29,7 @@ dependencies = [
     "nanoleafapi>=2.1.2",
     "astral>=3.2",
     "requests>=2.28",
+    "certifi>=2026.10.19",
     "flask>=3.0",
 ]
 

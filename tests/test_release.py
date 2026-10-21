@@ -9,6 +9,7 @@ def test_release_metadata_uses_company_identity():
 
     assert 'version = "0.3.1"' in metadata
     assert 'authors = [{ name = "Quicksilver Industries LTD." }]' in metadata
+    assert '"certifi>=2026.10.19"' in metadata
     personal_username = "north" + "foggy"
     assert personal_username not in metadata.lower()
 
